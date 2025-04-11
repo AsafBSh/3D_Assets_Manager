@@ -81,13 +81,12 @@ python bms_manager.py
 ## 📁 Project Structure
 
 ```
-f4bms-3d-assets-manager/
+3d_assets_manager/
 ├── bms_manager.py     # Main application
 ├── data_manager.py    # Data processing
 ├── data_classes.py    # Data structures
 ├── frames.py         # UI components
 ├── assets/           # Images and icons
-├── docs/            # Documentation
 └── logs/            # Application logs
 ```
 
@@ -105,15 +104,6 @@ The application is built with:
 - Automatic log rotation at 10MB
 - Comprehensive error tracking
 
-## 🤝 Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
 
 ## 📝 License
 
