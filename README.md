@@ -55,7 +55,11 @@ source venv/bin/activate
 
 3. Install dependencies:
 ```bash
-pip install -r requirements.txt
+customtkinter==5.2.1
+pillow==10.1.0
+pandas==2.1.3
+lxml==4.9.3
+loguru==0.7.2 
 ```
 
 ## 💻 Usage
