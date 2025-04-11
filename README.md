@@ -3,7 +3,7 @@
 A professional desktop application for managing, analyzing, and tracking 3D assets and textures in Falcon BMS. Built with modern Python and customtkinter, it provides a user-friendly interface for working with BMS model data.
 
 <div align="center">
-  <img src="assets/logo.png" alt="3D Assets Manager Logo" width="200"/>
+  <img src="assets/F16_logo.png" alt="3D Assets Manager Logo" width="200"/>
 </div>
 
 ## 🌟 Key Features
