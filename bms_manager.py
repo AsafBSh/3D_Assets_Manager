@@ -1,6 +1,7 @@
 import os
 import sys
 import customtkinter as ctk
+from tkinter import ttk
 from PIL import Image
 from loguru import logger
 from frames import HomeFrame, ModelsFrame, TexturesFrame, UnusedTexturesFrame, ParentsFrame, ProcessingWindow, PBRTexturesFrame
@@ -8,15 +9,18 @@ from data_manager import DataManager
 import ctypes
 import logging
 import threading
-from tkinter import ttk
 
 # Configure logger
-logger.remove()
+logger.remove()  # Remove any existing handlers
 logger.add(
     "logs/bms_manager.log",
     rotation="10 MB",
-    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
-    level="INFO"
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {function}:{line} | {message}",
+    level="DEBUG",  # Set to DEBUG to capture all log levels
+    enqueue=True,  # Enable thread-safe logging
+    backtrace=True,  # Include backtrace for errors
+    diagnose=True,  # Include diagnostic information
+    catch=True  # Catch any errors during logging
 )
 
 # Configure PIL logging
@@ -28,9 +32,64 @@ ctk.set_appearance_mode("System")  # Use system theme
 ctk.set_default_color_theme("blue")
 ctk.deactivate_automatic_dpi_awareness()  # Disable automatic DPI scaling
 
+def configure_table_styles():
+    """Configure Treeview styles for consistent table appearance across the application."""
+    style = ttk.Style()
+    
+    # Configure basic Treeview style
+    style.configure(
+        "Treeview",
+        background="#FFFFFF",
+        foreground="#2D3B45",
+        fieldbackground="#FFFFFF",
+        borderwidth=1,
+        relief="solid"
+    )
+    
+    # Configure Treeview headers
+    style.configure(
+        "Treeview.Heading",
+        background="#B8CFE5",
+        foreground="#2D3B45",
+        relief="flat"
+    )
+    
+    # Configure header hover and pressed states
+    style.map(
+        "Treeview.Heading",
+        background=[("pressed", "#A1B9D0"), ("active", "#A1B9D0")],
+        foreground=[("pressed", "#2D3B45"), ("active", "#2D3B45")]
+    )
+    
+    # Configure row selection colors
+    style.map(
+        "Treeview",
+        background=[("selected", "#7A92A9")],
+        foreground=[("selected", "#FFFFFF")]
+    )
+
+def configure_treeview_tags(treeview):
+    """Configure tags for a specific Treeview widget."""
+    # Configure tags for different states
+    treeview.tag_configure("missing", background="#B71C1C", foreground="#FFFFFF")
+    treeview.tag_configure("partial", background="#FFA500", foreground="#000000")
+    treeview.tag_configure("bml2", background="#2E7D32", foreground="#FFFFFF")
+    treeview.tag_configure("bml1_2", background="#81C784", foreground="#000000")
+    treeview.tag_configure("bml_1", background="#1565C0", foreground="#FFFFFF")
+    treeview.tag_configure("bml_1_1", background="#90CAF9", foreground="#000000")
+    treeview.tag_configure("pbr", background="#A5D6A7", foreground="#000000")
+    treeview.tag_configure("highres", background="#90CAF9", foreground="#000000")
+    treeview.tag_configure("both", background="#2E7D32", foreground="#FFFFFF")
+
 class BMSManager(ctk.CTk):
     def __init__(self):
         super().__init__()
+        
+        # Configure table styles
+        configure_table_styles()
+        
+        # Store the configure_treeview_tags function as an instance method
+        self.configure_treeview_tags = configure_treeview_tags
         
         # Get DPI scaling
         try:
@@ -45,15 +104,12 @@ class BMSManager(ctk.CTk):
         self.title_font_size = int(14 * self.dpi)  # Keep title larger
         self.nav_font_size = int(14 * self.dpi)  # Slightly larger than base for navigation
         
-        # Configure ttk styles
-        self._configure_ttk_styles()
-        
         # Initialize data manager
         self.data_manager = DataManager()
         
         # Configure main window
-        self.title("3D Assets Manager v0.9")
-        self.geometry("1300x700")
+        self.title("3D Assets Manager v0.95")
+        self.geometry("1370x730")
         self.minsize(800, 600)  # Set minimum window size
         
         # Set window background color
@@ -333,9 +389,20 @@ class BMSManager(ctk.CTk):
             self.unused_button.configure(fg_color=selected_color if name == "unused" else normal_color)
             self.pbr_button.configure(fg_color=selected_color if name == "pbr" else normal_color)
             
-            # Destroy existing frames
+            # Remove any existing frame reference
+            if hasattr(self, f"{name}_frame"):
+                delattr(self, f"{name}_frame")
+            
+            # Destroy existing frames with proper cleanup
             for widget in self.main_frame.winfo_children():
-                widget.destroy()
+                try:
+                    widget.destroy()
+                except Exception as e:
+                    logger.error(f"Error cleaning up widget: {str(e)}")
+                    continue
+            
+            # Update the display to ensure cleanup is complete
+            self.main_frame.update_idletasks()
             
             # Show selected frame
             frame = None
@@ -361,7 +428,6 @@ class BMSManager(ctk.CTk):
                         frame.update_list(textures)
                     else:
                         logger.warning("No textures found in data manager")
-                setattr(self, "textures_frame", frame)  # Store reference
             elif name == "parents":
                 frame = ParentsFrame(self.main_frame)
                 if self.data_manager.ct_file:
@@ -393,25 +459,41 @@ class BMSManager(ctk.CTk):
                             else:
                                 logger.warning("No unused textures found")
             elif name == "pbr":
-                frame = PBRTexturesFrame(self.main_frame, self.data_manager, self.dpi)
-                if self.data_manager.pdr_file:
-                    logger.info("Updating PBR textures frame")
-                    frame.update_list()
+                try:
+                    frame = PBRTexturesFrame(self.main_frame, self.data_manager, self.dpi)
+                    # Wait for frame to be ready
+                    self.update_idletasks()
+                    frame.update_idletasks()
+                    
+                    if self.data_manager.pdr_file:
+                        logger.info("Updating PBR textures frame with PDR file")
+                        frame.update_list()
+                    else:
+                        logger.info("Updating PBR textures frame without PDR file")
+                        # Load parents from Models folder if PDR is not available
+                        if not hasattr(self.data_manager, 'parents_loaded_from_models'):
+                            logger.info("Loading parents from Models folder")
+                            self.data_manager.load_parents_from_models_folder()
+                            self.data_manager.parents_loaded_from_models = True
+                        frame.update_list()
+                except Exception as e:
+                    logger.exception(f"Error initializing PBR frame: {str(e)}")
+                    raise
             
             if frame:
+                # Wait for frame to be ready
+                self.update_idletasks()
+                
+                # Grid the new frame
                 frame.grid(row=0, column=0, sticky="nsew")
+                
                 # Store reference to current frame with correct attribute name
-                if name == "unused":
-                    setattr(self, "unused_frame", frame)
-                elif name == "pbr":
-                    setattr(self, "pbr_frame", frame)
-                elif name == "textures":
-                    setattr(self, "textures_frame", frame)
-                else:
-                    setattr(self, f"{name}_frame", frame)
+                setattr(self, f"{name}_frame", frame)
+                
                 # Configure grid for the selected frame
                 self.main_frame.grid_columnconfigure(0, weight=1)
                 self.main_frame.grid_rowconfigure(0, weight=1)
+                
                 # Update the frame
                 frame.update_idletasks()
                 
@@ -517,6 +599,11 @@ class BMSManager(ctk.CTk):
     
     def load_parent_details_report(self, ct_file):
         try:
+            # Clear the PDR entry first (always clear it when loading new CT file)
+            self.pdr_entry.configure(state="normal")
+            self.pdr_entry.delete(0, ctk.END)
+            self.pdr_entry.configure(state="readonly")
+            
             # Get the directory containing Falcon4_CT.xml
             ct_dir = os.path.dirname(ct_file)
             
@@ -526,91 +613,41 @@ class BMSManager(ctk.CTk):
             logger.info(f"Looking for ParentsDetailsReport.txt at: {pdr_path}")
             
             if os.path.exists(pdr_path):
+                # PDR found, set the path
                 self.pdr_entry.configure(state="normal")
-                self.pdr_entry.delete(0, ctk.END)
                 self.pdr_entry.insert(0, pdr_path)
                 self.pdr_entry.configure(state="readonly")
                 
                 if self.data_manager.load_pdr_file(pdr_path):
                     self.pdr_status.configure(text="Loaded", text_color="green")
                     logger.info(f"Successfully loaded ParentsDetailsReport.txt from {pdr_path}")
-                    
-                    # Update current frame if needed
-                    if isinstance(self.main_frame.winfo_children()[0], TexturesFrame):
-                        textures = self.data_manager.get_textures()
-                        if hasattr(self, 'textures_frame'):
-                            self.textures_frame.update_list(textures)
                 else:
                     self.pdr_status.configure(text="Error loading file", text_color="red")
-                    # Clear the entry on error
-                    self.pdr_entry.configure(state="normal")
-                    self.pdr_entry.delete(0, ctk.END)
-                    self.pdr_entry.configure(state="readonly")
             else:
-                self.pdr_status.configure(text="File not found", text_color="red")
-                # Clear the entry if file not found
-                self.pdr_entry.configure(state="normal")
-                self.pdr_entry.delete(0, ctk.END)
-                self.pdr_entry.configure(state="readonly")
-                logger.warning(f"ParentsDetailsReport.txt not found at: {pdr_path}")
+                # PDR not found, use alternative loading method
+                logger.warning("ParentsDetailsReport.txt not found, using alternative loading method")
+                self.pdr_status.configure(text="Using Models folder", text_color="orange")
+                
+                if self.data_manager.load_parents_from_models_folder():
+                    logger.info("Successfully loaded parent data from Models folder")
+                else:
+                    logger.error("Failed to load parent data from Models folder")
+                    self.pdr_status.configure(text="Loading failed", text_color="red")
+                    return
+            
+            # Load cockpit parents after either method
+            self.data_manager.load_cockpit_parents(ct_file)
+            
+            # Update current frame if needed
+            self._update_current_frame()
                 
         except Exception as e:
             self.pdr_status.configure(text="Error loading file", text_color="red")
-            # Clear the entry on error
-            self.pdr_entry.configure(state="normal")
-            self.pdr_entry.delete(0, ctk.END)
-            self.pdr_entry.configure(state="readonly")
             logger.error(f"Error loading ParentsDetailsReport.txt: {str(e)}")
             logger.error("Stack trace:", exc_info=True)
 
     def set_texture_paths(self, base_directory):
         self.data_manager.set_texture_paths(base_directory)
-
-    def _configure_ttk_styles(self):
-        """Configure ttk styles centrally for consistent appearance."""
-        style = ttk.Style()
-        
-        # Configure Treeview style
-        style.configure(
-            "Treeview",
-            rowheight=int(25 * self.dpi),
-            font=('Segoe UI', int(11 * self.dpi)),
-            background="#FFFFFF",
-            fieldbackground="#FFFFFF",
-            foreground="#2D3B45",
-            selectbackground="#CCE4F7",
-            selectforeground="#2D3B45"
-        )
-        
-        # Configure Treeview Heading style
-        style.configure(
-            "Treeview.Heading",
-            font=('Segoe UI', int(12 * self.dpi), 'bold'),
-            background="#B8CFE5",
-            foreground="#2D3B45"
-        )
-        
-        # Configure Treeview selection colors
-        style.map(
-            "Treeview",
-            background=[("selected", "#CCE4F7")],
-            foreground=[("selected", "#2D3B45")]
-        )
-        
-        # Configure Treeview Heading hover/pressed states
-        style.map(
-            "Treeview.Heading",
-            background=[("pressed", "#A1B9D0"), ("active", "#A1B9D0")],
-            foreground=[("pressed", "#2D3B45"), ("active", "#2D3B45")]
-        )
-        
-        # Configure Scrollbar style
-        style.configure(
-            "TScrollbar",
-            background="#D4E5F2",
-            troughcolor="#FFFFFF",
-            width=int(12 * self.dpi)
-        )
 
 if __name__ == "__main__":
     try:

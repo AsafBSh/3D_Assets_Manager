@@ -2,14 +2,24 @@ import customtkinter as ctk
 from PIL import Image, ImageTk
 from typing import List, Callable, Optional
 from data_manager import ModelData, TextureData
-import logging
+from loguru import logger
 from tkinter import ttk
 import ctypes
 import threading
 import os
 
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
+# Configure logger
+logger.remove()  # Remove any existing handlers
+logger.add(
+    "logs/data_manager.log",
+    rotation="10 MB",
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {function}:{line} | {message}",
+    level="DEBUG",  # Set to DEBUG to capture all log levels
+    enqueue=True,  # Enable thread-safe logging
+    backtrace=True,  # Include backtrace for errors
+    diagnose=True,  # Include diagnostic information
+    catch=True  # Catch any errors during logging
+)
 
 class HomeFrame(ctk.CTkFrame):
     def __init__(self, master):
@@ -152,6 +162,10 @@ class ModelsFrame(ctk.CTkFrame):
         self.table_font_size = int(11 * dpi)  # Table content font size
         self.table_header_size = int(12 * dpi)  # Table header font size
         self.row_height = int(25 * dpi)  # Row height
+
+        # Configure style for row height only
+        style = ttk.Style()
+        style.configure("Treeview", rowheight=self.row_height)
         
         # Configure grid - make both columns expandable
         self.grid_columnconfigure(0, weight=1)  # Table column
@@ -237,6 +251,28 @@ class ModelsFrame(ctk.CTkFrame):
         self.table_frame.grid_rowconfigure(0, weight=1)
         self.table_frame.configure(fg_color="#D4E5F2")  # Lighter shade for table frame
         
+        # Create and configure Treeview style
+        style = ttk.Style()
+        style.configure(
+            "Treeview",
+            rowheight=self.row_height,
+            font=('Segoe UI', self.table_font_size),
+            background="#FFFFFF",
+            fieldbackground="#FFFFFF",
+            foreground="#2D3B45"
+        )
+        style.configure(
+            "Treeview.Heading",
+            font=('Segoe UI', self.table_header_size, 'bold'),
+            background="#B8CFE5",  # Lighter background for headers
+            foreground="#2D3B45"   # Dark text for better visibility
+        )
+        style.map(
+            "Treeview.Heading",
+            background=[("pressed", "#A1B9D0"), ("active", "#A1B9D0")],  # Darker when pressed/hovered
+            foreground=[("pressed", "#2D3B45"), ("active", "#2D3B45")]   # Keep text dark
+        )
+        
         # Create Treeview with adjusted column widths
         self.tree = ttk.Treeview(
             self.table_frame,
@@ -244,6 +280,9 @@ class ModelsFrame(ctk.CTkFrame):
             show="headings",
             style="Treeview"
         )
+        
+        # Configure tags using the master's method
+        self.master.master.configure_treeview_tags(self.tree)
         
         # Configure BML version tags
         self.tree.tag_configure("bml2", background="#2E7D32", foreground="white")  # Dark green
@@ -601,6 +640,10 @@ class TexturesFrame(ctk.CTkFrame):
         self.table_font_size = int(11 * self.dpi)  # Table content font size
         self.table_header_size = int(12 * self.dpi)  # Table header font size
         self.row_height = int(25 * self.dpi)  # Row height
+
+        # Configure style for row height only
+        style = ttk.Style()
+        style.configure("Treeview", rowheight=self.row_height)
         
         # Configure grid layout - make both columns expandable with proper ratio
         self.grid_columnconfigure(0, weight=1)  # Left table gets 1 part
@@ -667,6 +710,28 @@ class TexturesFrame(ctk.CTkFrame):
         self.textures_frame.grid_rowconfigure(0, weight=1)
         self.textures_frame.configure(fg_color="#B8CFE5")  # Slightly darker shade for frame
         
+        # Create Treeview style
+        style = ttk.Style()
+        style.configure(
+            "Treeview",
+            rowheight=self.row_height,
+            font=('Segoe UI', self.table_font_size),
+            background="#FFFFFF",
+            fieldbackground="#FFFFFF",
+            foreground="#2D3B45"
+        )
+        style.configure(
+            "Treeview.Heading",
+            font=('Segoe UI', self.table_header_size, 'bold'),
+            background="#B8CFE5",  # Lighter background for headers
+            foreground="#2D3B45"   # Dark text for better visibility
+        )
+        style.map(
+            "Treeview.Heading",
+            background=[("pressed", "#A1B9D0"), ("active", "#A1B9D0")],  # Darker when pressed/hovered
+            foreground=[("pressed", "#2D3B45"), ("active", "#2D3B45")]   # Keep text dark
+        )
+        
         # Create Treeview for textures list
         self.textures_tree = ttk.Treeview(
             self.textures_frame,
@@ -674,6 +739,9 @@ class TexturesFrame(ctk.CTkFrame):
             show="headings",
             style="Treeview"
         )
+        
+        # Configure tags using the master's method
+        self.master.master.configure_treeview_tags(self.textures_tree)
         
         # Configure tags for different states
         self.textures_tree.tag_configure("missing", background="#B71C1C", foreground="white")  # Red for missing
@@ -793,10 +861,34 @@ class TexturesFrame(ctk.CTkFrame):
         self.current_sort = None
         self.sort_ascending = True
     
-    def update_list(self, textures: List[str]):
-        # Convert to integers for proper numeric sorting
-        self.textures = sorted([int(t) for t in textures])
+    def update_list(self, textures: List[str] = None):
+        """Update the textures list with new data."""
+        if textures is None:
+            textures = []
+            self.status_label.configure(text="No texture data available - PDR file required")
+            self.textures = []
+            self.filtered_textures = []
+            self._update_textures_display()
+            return
+
+        # Separate numeric and non-numeric textures for proper sorting
+        numeric_textures = []
+        non_numeric_textures = []
+        
+        for texture in textures:
+            if str(texture).isdigit():
+                numeric_textures.append(int(texture))
+            else:
+                non_numeric_textures.append(texture)
+        
+        # Sort both lists
+        numeric_textures.sort()
+        non_numeric_textures.sort()
+        
+        # Combine lists with numeric textures first
+        self.textures = [str(t) for t in numeric_textures] + non_numeric_textures
         self.filtered_textures = self.textures.copy()
+        
         self._update_textures_display()
         self.status_label.configure(text=f"Showing {len(self.filtered_textures)} of {len(self.textures)} textures")
     
@@ -825,21 +917,49 @@ class TexturesFrame(ctk.CTkFrame):
             self.textures_tree.insert("", "end", values=(str(texture),), tags=tag)
     
     def sort_textures(self, column):
-        # Update sort order
+        """Sort textures list."""
+        if not self.textures:  # Don't sort if no data
+            return
+            
         if self.current_sort == column:
             self.sort_ascending = not self.sort_ascending
         else:
             self.current_sort = column
             self.sort_ascending = True
         
-        # Sort textures numerically
-        self.filtered_textures.sort(reverse=not self.sort_ascending)
+        # Separate numeric and non-numeric textures for proper sorting
+        numeric_textures = []
+        non_numeric_textures = []
         
-        # Update display
+        for texture in self.filtered_textures:
+            if str(texture).isdigit():
+                numeric_textures.append(int(texture))
+            else:
+                non_numeric_textures.append(texture)
+        
+        # Sort both lists
+        numeric_textures.sort(reverse=not self.sort_ascending)
+        non_numeric_textures.sort(reverse=not self.sort_ascending)
+        
+        # Combine lists with numeric textures first
+        self.filtered_textures = [str(t) for t in numeric_textures] + non_numeric_textures
+        
         self._update_textures_display()
-        
-        # Update column header
         self.textures_tree.heading("texture", text=f"Textures List{' ▼' if self.sort_ascending else ' ▲'}")
+    
+    def search_textures(self, *args):
+        """Search textures by name."""
+        if not self.textures:  # Don't search if no data
+            return
+            
+        search_text = self.search_entry.get().lower()
+        if not search_text:
+            self.filtered_textures = self.textures.copy()
+        else:
+            self.filtered_textures = [t for t in self.textures if search_text in str(t).lower()]
+        
+        self._update_textures_display()
+        self.status_label.configure(text=f"Showing {len(self.filtered_textures)} of {len(self.textures)} textures")
     
     def sort_details(self, column):
         # Get all items
@@ -872,12 +992,6 @@ class TexturesFrame(ctk.CTkFrame):
             column,
             text=f"{column.replace('_', ' ').title()}{' ▼' if self.sort_ascending else ' ▲'}"
         )
-    
-    def search_textures(self, *args):
-        search_text = self.search_entry.get().lower()
-        self.filtered_textures = [t for t in self.textures if search_text in str(t).lower()]
-        self._update_textures_display()
-        self.status_label.configure(text=f"Showing {len(self.filtered_textures)} of {len(self.textures)} textures")
     
     def _on_texture_select(self, event):
         """Handle texture selection event."""
@@ -1023,11 +1137,15 @@ class UnusedTexturesFrame(ctk.CTkFrame):
         except Exception:
             dpi = self.winfo_fpixels('1i') / 72.0  # Fallback method
         
-        # Calculate scaled sizes - match with ModelsFrame
+        # Calculate scaled sizes
         self.base_font_size = int(12 * dpi)  # Base font size
         self.table_font_size = int(11 * dpi)  # Table content font size
         self.table_header_size = int(12 * dpi)  # Table header font size
         self.row_height = int(25 * dpi)  # Row height
+
+        # Configure style for row height only
+        style = ttk.Style()
+        style.configure("Treeview", rowheight=self.row_height)
         
         # Configure grid
         self.grid_columnconfigure(0, weight=1)
@@ -1085,6 +1203,28 @@ class UnusedTexturesFrame(ctk.CTkFrame):
         self.table_frame.grid_rowconfigure(0, weight=1)
         self.table_frame.configure(fg_color="#B8CFE5")  # Slightly darker shade for frame
         
+        # Create and configure Treeview style
+        style = ttk.Style()
+        style.configure(
+            "Treeview",
+            rowheight=self.row_height,
+            font=('Segoe UI', self.table_font_size),
+            background="#FFFFFF",
+            fieldbackground="#FFFFFF",
+            foreground="#2D3B45"
+        )
+        style.configure(
+            "Treeview.Heading",
+            font=('Segoe UI', self.table_header_size, 'bold'),
+            background="#B8CFE5",  # Lighter background for headers
+            foreground="#2D3B45"   # Dark text for better visibility
+        )
+        style.map(
+            "Treeview.Heading",
+            background=[("pressed", "#A1B9D0"), ("active", "#A1B9D0")],  # Darker when pressed/hovered
+            foreground=[("pressed", "#2D3B45"), ("active", "#2D3B45")]   # Keep text dark
+        )
+        
         # Create Treeview for unused textures
         self.tree = ttk.Treeview(
             self.table_frame,
@@ -1092,6 +1232,9 @@ class UnusedTexturesFrame(ctk.CTkFrame):
             show="headings",
             style="Treeview"
         )
+        
+        # Configure tags using the master's method
+        self.master.master.configure_treeview_tags(self.tree)
         
         # Configure missing texture tag
         self.tree.tag_configure("missing", background="#B71C1C", foreground="white")
@@ -1225,11 +1368,15 @@ class ParentsFrame(ctk.CTkFrame):
         except Exception:
             dpi = self.winfo_fpixels('1i') / 72.0  # Fallback method
         
-        # Calculate scaled sizes - match with ModelsFrame
+        # Calculate scaled sizes
         self.base_font_size = int(12 * dpi)  # Base font size
         self.table_font_size = int(11 * dpi)  # Table content font size
         self.table_header_size = int(12 * dpi)  # Table header font size
         self.row_height = int(25 * dpi)  # Row height
+
+        # Configure style for row height only
+        style = ttk.Style()
+        style.configure("Treeview", rowheight=self.row_height)
         
         # Configure grid layout - make both columns expandable with proper ratio
         self.grid_columnconfigure(0, weight=1)  # Left table gets 1 part
@@ -1315,6 +1462,28 @@ class ParentsFrame(ctk.CTkFrame):
         self.parents_frame.grid_rowconfigure(0, weight=1)
         self.parents_frame.configure(fg_color="#B8CFE5")  # Slightly darker shade for frame
         
+        # Create Treeview style
+        style = ttk.Style()
+        style.configure(
+            "Treeview",
+            rowheight=self.row_height,
+            font=('Segoe UI', self.table_font_size),
+            background="#FFFFFF",
+            fieldbackground="#FFFFFF",
+            foreground="#2D3B45"
+        )
+        style.configure(
+            "Treeview.Heading",
+            font=('Segoe UI', self.table_header_size, 'bold'),
+            background="#B8CFE5",  # Lighter background for headers
+            foreground="#2D3B45"   # Dark text for better visibility
+        )
+        style.map(
+            "Treeview.Heading",
+            background=[("pressed", "#A1B9D0"), ("active", "#A1B9D0")],  # Darker when pressed/hovered
+            foreground=[("pressed", "#2D3B45"), ("active", "#2D3B45")]   # Keep text dark
+        )
+        
         # Create Treeview for parents list
         self.parents_tree = ttk.Treeview(
             self.parents_frame,
@@ -1322,6 +1491,9 @@ class ParentsFrame(ctk.CTkFrame):
             show="headings",
             style="Treeview"
         )
+        
+        # Configure tags using the master's method
+        self.master.master.configure_treeview_tags(self.parents_tree)
         
         # Configure BML version and PBR tags
         self.parents_tree.tag_configure("bml2", background="#2E7D32", foreground="white")  # Dark green
@@ -1580,7 +1752,7 @@ class ParentsFrame(ctk.CTkFrame):
                         tex["name"],
                         tex["type"],
                         tex["path"]  # Only show the path
-                    ), tags=("missing",) if not exists else ())
+                    ))  # Removed tags
             elif parent_data.bml_version == 1:
                 # Add regular texture information
                 if parent_data.textures:
@@ -1767,6 +1939,7 @@ class LegendWindow(ctk.CTkToplevel):
 class PBRTexturesFrame(ctk.CTkFrame):
     def __init__(self, master, data_manager, dpi=1.0):
         super().__init__(master)
+        logger.info("Initializing PBRTexturesFrame")
         
         self.data_manager = data_manager
         self.dpi = dpi
@@ -1779,28 +1952,10 @@ class PBRTexturesFrame(ctk.CTkFrame):
         self.table_font_size = int(11 * self.dpi)
         self.table_header_size = int(12 * self.dpi)
         self.row_height = int(25 * self.dpi)
-        
-        # Create and configure style
+
+        # Configure style for row height only
         style = ttk.Style()
-        style.configure(
-            "Treeview",
-            rowheight=self.row_height,
-            font=('Segoe UI', self.table_font_size),
-            background="#FFFFFF",
-            foreground="#2D3B45",
-            fieldbackground="#FFFFFF"
-        )
-        style.configure(
-            "Treeview.Heading",
-            font=('Segoe UI', self.table_header_size, 'bold'),
-            background="#B8CFE5",  # Lighter background for headers
-            foreground="#2D3B45"   # Dark text for better visibility
-        )
-        style.map(
-            "Treeview.Heading",
-            background=[("pressed", "#A1B9D0"), ("active", "#A1B9D0")],  # Darker when pressed/hovered
-            foreground=[("pressed", "#2D3B45"), ("active", "#2D3B45")]   # Keep text dark
-        )
+        style.configure("Treeview", rowheight=self.row_height)
         
         # Configure grid layout
         self.grid_columnconfigure(0, weight=1)  # Left side gets 1 part
@@ -1850,7 +2005,7 @@ class PBRTexturesFrame(ctk.CTkFrame):
         # Add legend items
         legend_items = [
             ("Missing Texture", "#B71C1C"),
-            ("Partially Missing", "#FFA500")
+            ("Multiple Paths", "#FFA500")  # Changed text from "Partially Missing" to "Multiple Paths"
         ]
         
         for i, (text, color) in enumerate(legend_items):
@@ -1897,9 +2052,8 @@ class PBRTexturesFrame(ctk.CTkFrame):
             style="Treeview"
         )
         
-        # Configure tags for different states
-        self.texture_list.tag_configure("missing", background="#B71C1C", foreground="white")  # Red background, white text
-        self.texture_list.tag_configure("partial", background="#FFA500", foreground="black")  # Orange background, black text
+        # Configure tags using the master's method
+        self.master.master.configure_treeview_tags(self.texture_list)
         
         # Add scrollbar
         vsb = ttk.Scrollbar(left_frame, orient="vertical", command=self.texture_list.yview)
@@ -1999,171 +2153,163 @@ class PBRTexturesFrame(ctk.CTkFrame):
         self.texture_list.tag_configure("missing", background="#B71C1C", foreground="white")  # Red background, white text
         self.texture_list.tag_configure("partial", background="#FFA500", foreground="black")  # Orange background, black text
         self.info_tree.tag_configure("multiple_paths", background="#FDD835")  # Yellow background for multiple paths
-    
-    def search_textures(self, *args):
-        """Search textures by name."""
-        search_text = self.search_entry.get().lower().strip()
         
-        # Clear existing items
-        for item in self.texture_list.get_children():
-            self.texture_list.delete(item)
-        
-        # If search is empty, show all textures
-        if not search_text:
-            matching_textures = self.all_textures
-        else:
-            # Filter textures based on search text
-            matching_textures = {
-                name: data for name, data in self.all_textures.items()
-                if search_text in name.lower()
-            }
-        
-        # Add filtered textures to list
-        for texture_name, data in sorted(matching_textures.items()):
-            # Count how many paths exist and don't exist
-            paths_exist = sum(exists for exists in data['paths'].values())
-            total_paths = len(data['paths'])
-            
-            # Determine tag based on existence in paths
-            tag = ""
-            if paths_exist == 0:
-                # Texture doesn't exist in any path
-                tag = "missing"
-            elif paths_exist < total_paths:
-                # Texture exists in some paths but not all
-                tag = "missing"
-            elif total_paths > 1:
-                # Texture exists in all paths and has multiple paths
-                tag = "partial"
-            
-            # Add to list
-            self.texture_list.insert("", "end", values=(texture_name,), tags=(tag,))
-        
-        # Update status with search results
-        total_matching = len(matching_textures)
-        missing_matching = sum(1 for data in matching_textures.values() 
-                             if sum(exists for exists in data['paths'].values()) < len(data['paths']))
-        multiple_matching = sum(1 for data in matching_textures.values() 
-                              if len(data['paths']) > 1 and all(data['paths'].values()))
-        
-        if search_text:
-            status_text = f"Found {total_matching} matching textures "
-        else:
-            status_text = f"Showing all {total_matching} textures "
-        
-        status_text += f"(Missing: {missing_matching}, Multiple Paths: {multiple_matching})"
-        self.status_label.configure(text=status_text)
+        logger.info("PBRTexturesFrame initialization complete")
 
     def update_list(self):
         """Update the list of PBR textures."""
-        # Clear existing items
-        for item in self.texture_list.get_children():
-            self.texture_list.delete(item)
-        
-        # Get all parent numbers with BML version 2
-        bml2_parents = [
-            parent_number for parent_number, parent_data 
-            in self.data_manager.parents.items() 
-            if parent_data.bml_version == 2
-        ]
-        
-        # Track unique textures and their paths
-        self.all_textures = {}
-        
-        # Get textures from each BML2 parent
-        for parent_number in bml2_parents:
-            textures = self.data_manager.get_bml2_textures(parent_number)
-            for texture in textures:
-                texture_name = texture['name']
-                if texture_name not in self.all_textures:
-                    self.all_textures[texture_name] = {
-                        'parents': set(),
-                        'types': set(),
-                        'paths': {},  # Dictionary to track paths and their existence
-                        'type': texture['type']  # Store the texture type
-                    }
-                
-                # Add parent and path information
-                self.all_textures[texture_name]['parents'].add(parent_number)
-                self.all_textures[texture_name]['types'].add(texture['type'])
-                
-                # Check if texture exists in this path
-                full_path = os.path.join(self.data_manager.base_folder, texture['path'], f"{texture_name}.dds")
-                self.all_textures[texture_name]['paths'][texture['path']] = os.path.exists(full_path)
-        
-        # Add textures to list
-        for texture_name, data in sorted(self.all_textures.items()):
-            # Count how many paths exist and don't exist
-            paths_exist = sum(exists for exists in data['paths'].values())
-            total_paths = len(data['paths'])
+        try:
+            logger.info("Starting PBR textures update")
             
-            # Determine tag based on existence in paths
-            tag = ""
-            if paths_exist == 0:
-                # Texture doesn't exist in any path
-                tag = "missing"
-            elif paths_exist < total_paths:
-                # Texture exists in some paths but not all
-                tag = "missing"
-            elif total_paths > 1:
-                # Texture exists in all paths and has multiple paths
-                tag = "partial"
+            # Clear existing items
+            for item in self.texture_list.get_children():
+                self.texture_list.delete(item)
             
-            # Add to list
-            self.texture_list.insert("", "end", values=(texture_name,), tags=(tag,))
-        
-        # Update status
-        total_textures = len(self.all_textures)
-        missing_textures = sum(1 for data in self.all_textures.values() 
-                             if sum(exists for exists in data['paths'].values()) < len(data['paths']))
-        multiple_paths = sum(1 for data in self.all_textures.values() 
-                           if len(data['paths']) > 1 and all(data['paths'].values()))
-        
-        status_text = f"Total PBR Textures: {total_textures} "
-        status_text += f"(Missing: {missing_textures}, Multiple Paths: {multiple_paths})"
-        self.status_label.configure(text=status_text)
+            # Track unique textures and their paths
+            self.all_textures = {}
+            
+            # Get all parent numbers with BML version 2
+            bml2_parents = [
+                parent_number for parent_number, parent_data 
+                in self.data_manager.parents.items() 
+                if parent_data.bml_version == 2
+            ]
+            logger.info(f"Found {len(bml2_parents)} BML2 parents")
+            
+            if not bml2_parents:
+                logger.warning("No BML2 parents found")
+                return
+            
+            # Pre-cache existence checks for better performance
+            existence_cache = {}
+            
+            # Process all BML2 parents in a batch
+            for parent_number in bml2_parents:
+                textures = self.data_manager.get_bml2_textures(parent_number)
+                
+                for texture in textures:
+                    texture_name = texture['name']
+                    texture_path = texture['path']
+                    texture_type = texture['type']
+                    
+                    # Initialize texture data if not exists
+                    if texture_name not in self.all_textures:
+                        self.all_textures[texture_name] = {
+                            'parents': set(),
+                            'types': set(),
+                            'paths': {},
+                            'type': texture_type,
+                            'base_paths': set()
+                        }
+                    
+                    # Add parent and type information
+                    self.all_textures[texture_name]['parents'].add(parent_number)
+                    self.all_textures[texture_name]['types'].add(texture_type)
+                    self.all_textures[texture_name]['base_paths'].add(texture_path)
+                    
+                    # Check if texture exists (use cache)
+                    cache_key = (texture_path, texture_name)
+                    if cache_key not in existence_cache:
+                        full_path = os.path.join(self.data_manager.base_folder, texture_path, f"{texture_name}.dds")
+                        existence_cache[cache_key] = os.path.exists(full_path)
+                    
+                    exists = existence_cache[cache_key]
+                    self.all_textures[texture_name]['paths'][texture_path] = exists
+            
+            # Add textures to list (batch operation)
+            items_to_add = []
+            for texture_name, data in sorted(self.all_textures.items()):
+                # Count how many paths exist and don't exist
+                paths_exist = sum(exists for exists in data['paths'].values())
+                total_paths = len(data['paths'])
+                
+                # Count unique base paths
+                unique_base_paths = len(data['base_paths'])
+                
+                # Determine tag based on existence in paths
+                tag = ""
+                if paths_exist == 0:
+                    tag = "missing"
+                elif paths_exist < total_paths:
+                    tag = "missing"
+                elif unique_base_paths > 1:
+                    tag = "partial"
+                
+                items_to_add.append((texture_name, tag))
+            
+            # Batch insert items
+            for texture_name, tag in items_to_add:
+                self.texture_list.insert("", "end", values=(texture_name,), tags=(tag,))
+            
+            # Update status
+            total_textures = len(self.all_textures)
+            missing_textures = sum(1 for data in self.all_textures.values() 
+                                 if sum(exists for exists in data['paths'].values()) < len(data['paths']))
+            multiple_paths = sum(1 for data in self.all_textures.values() 
+                               if len(data['base_paths']) > 1)
+            
+            status_text = f"Total PBR Textures: {total_textures} "
+            status_text += f"(Missing: {missing_textures}, Multiple Paths: {multiple_paths})"
+            self.status_label.configure(text=status_text)
+            
+            logger.info(f"Completed PBR textures update: {status_text}")
+            
+        except Exception as e:
+            logger.error(f"Error in update_list: {str(e)}")
+            raise
 
-    def _on_texture_select(self, event):
-        """Handle texture selection event."""
-        selection = self.texture_list.selection()
-        if not selection:
-            return
-        
-        # Get selected texture name
-        texture_name = self.texture_list.item(selection[0])['values'][0]
-        self.show_texture_details(texture_name)
-        
     def show_texture_details(self, texture_name):
         """Show details for the selected texture."""
-        # Clear existing items
-        for item in self.info_tree.get_children():
-            self.info_tree.delete(item)
-        for item in self.parents_tree.get_children():
-            self.parents_tree.delete(item)
-        
-        # Get texture data
-        texture_data = self.all_textures.get(texture_name)
-        if not texture_data:
-            return
-        
-        # Add paths to info table
-        for path, exists in sorted(texture_data['paths'].items()):
-            self.info_tree.insert("", "end", values=(
-                texture_data['type'],  # Use the stored texture type
-                path
-            ))
-        
-        # Update parents table
-        for parent_number in texture_data['parents']:
-            parent = self.data_manager.parents.get(parent_number)
-            if parent:
-                self.parents_tree.insert("", "end", values=(
-                    str(parent.parent_number),
-                    parent.model_name,
-                    parent.model_type,
-                    str(parent.ct_number),
-                    str(parent.entity_idx)
-                ))
+        try:
+            logger.debug(f"Showing details for texture: {texture_name}")
+            
+            # Clear existing items
+            for item in self.info_tree.get_children():
+                self.info_tree.delete(item)
+            for item in self.parents_tree.get_children():
+                self.parents_tree.delete(item)
+            
+            # Get texture data
+            texture_data = self.all_textures.get(texture_name)
+            if not texture_data:
+                logger.warning(f"No texture data found for {texture_name}")
+                return
+            
+            logger.debug(f"Found texture data: {texture_data}")
+            
+            # Add paths to info table
+            for path, exists in sorted(texture_data['paths'].items()):
+                # Skip variant paths for display
+                if "/" in path and path.split("/")[-1] in ["Normal", "ARMW"]:
+                    continue
+                    
+                # Get the texture type
+                texture_type = texture_data['type']
+                
+                logger.debug(f"Adding path info - Type: {texture_type}, Path: {path}, Exists: {exists}")
+                self.info_tree.insert("", "end", values=(
+                    texture_type,
+                    path
+                ))  # Removed tags
+            
+            # Update parents table
+            for parent_number in texture_data['parents']:
+                parent = self.data_manager.parents.get(parent_number)
+                if parent:
+                    logger.debug(f"Adding parent info - Number: {parent_number}, Name: {parent.model_name}")
+                    self.parents_tree.insert("", "end", values=(
+                        str(parent.parent_number),
+                        parent.model_name,
+                        parent.model_type,
+                        str(parent.ct_number),
+                        str(parent.entity_idx)
+                    ))
+                else:
+                    logger.warning(f"Parent data not found for parent number {parent_number}")
+                    
+        except Exception as e:
+            logger.exception(f"Error showing texture details for {texture_name}: {str(e)}")
+            raise
 
     def show_legend(self):
         # Store original color if not stored
@@ -2254,7 +2400,7 @@ class PBRTexturesFrame(ctk.CTkFrame):
         missing_matching = sum(1 for data in matching_textures.values() 
                              if sum(exists for exists in data['paths'].values()) < len(data['paths']))
         multiple_matching = sum(1 for data in matching_textures.values() 
-                              if len(data['paths']) > 1 and all(data['paths'].values()))
+                              if len(data['base_paths']) > 1)
         
         if search_text:
             status_text = f"Found {total_matching} matching textures "
@@ -2263,3 +2409,35 @@ class PBRTexturesFrame(ctk.CTkFrame):
         
         status_text += f"(Missing: {missing_matching}, Multiple Paths: {multiple_matching})"
         self.status_label.configure(text=status_text)
+
+    def _on_texture_select(self, event):
+        """Handle texture selection event."""
+        selection = self.texture_list.selection()
+        if not selection:
+            return
+        
+        # Get selected texture name
+        texture_name = self.texture_list.item(selection[0])['values'][0]
+        self.show_texture_details(texture_name)
+        
+    def show_legend(self):
+        # Store original color if not stored
+        if self.legend_button_color is None:
+            self.legend_button_color = self.legend_button.cget("fg_color")
+        
+        # Disable button and change color
+        self.legend_button.configure(state="disabled", fg_color="gray")
+        
+        legend_items = [
+            ("#2E7D32", "Both PBR and High Resolution Available"),
+            ("#A5D6A7", "PBR Textures Available"),
+            ("#90CAF9", "High Resolution Available"),
+            ("#B71C1C", "Missing Texture")
+        ]
+        
+        # Create legend window with callback
+        LegendWindow(self, "Textures Color Legend", legend_items,
+                    on_close=lambda: self.legend_button.configure(
+                        state="normal",
+                        fg_color=self.legend_button_color
+                    ))

@@ -7,12 +7,15 @@ from data_classes import ModelData, ParentData, TextureData
 import json
 
 # Configure logger
-logger.remove()
+logger.remove()  # Remove any existing handlers
 logger.add(
     "logs/data_manager.log",
     rotation="10 MB",
-    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
-    level="INFO"
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {function}:{line} | {message}",
+    level="DEBUG",  # Set to DEBUG to capture all log levels
+    enqueue=True,  # Enable thread-safe logging
+    backtrace=True,  # Include backtrace for errors
+    diagnose=True   # Include diagnostic information
 )
 
 class DataManager:
@@ -155,21 +158,21 @@ class DataManager:
                         logger.debug(f"Invalid CT number: {ct_element.get('Num')}")
                         continue
                     
-                    # Get class type from Class element
-                    class_type = -1
-                    class_element = ct_element.find("Class")
-                    if class_element is not None and class_element.text:
+                    # Get EntityType
+                    entity_type = -1
+                    entity_type_element = ct_element.find("EntityType")
+                    if entity_type_element is not None and entity_type_element.text:
                         try:
-                            class_type = int(class_element.text)
+                            entity_type = int(entity_type_element.text)
                         except (ValueError, TypeError):
-                            logger.debug(f"CT {ct_number} - Invalid class type value: {class_element.text}")
+                            logger.debug(f"CT {ct_number} - Invalid EntityType value: {entity_type_element.text}")
                             continue
                     else:
-                        logger.debug(f"CT {ct_number} - No Class element found")
+                        logger.debug(f"CT {ct_number} - No EntityType element found")
                         continue
                     
-                    # Only process classes 2, 7, and 8
-                    if class_type not in [2, 7, 8] or ct_number == 0:
+                    # Only process EntityTypes 1, 5, and 6
+                    if entity_type not in [1, 5, 6] or ct_number == 0:
                         continue
                     
                     # Get entity index
@@ -182,14 +185,14 @@ class DataManager:
                             logger.debug(f"CT {ct_number} - Invalid entity index: {entity_element.text}")
                             continue
                     
-                    # Get name based on class type and entity index
+                    # Get name based on EntityType
                     name = ""
                     try:
-                        if class_type == 2 and entity_idx in self.fcd_data:
+                        if entity_type == 1 and entity_idx in self.fcd_data:
                             name = self.fcd_data[entity_idx]
-                        elif class_type == 7 and entity_idx in self.vcd_data:
+                        elif entity_type == 5 and entity_idx in self.vcd_data:
                             name = self.vcd_data[entity_idx]
-                        elif class_type == 8 and entity_idx in self.wcd_data:
+                        elif entity_type == 6 and entity_idx in self.wcd_data:
                             name = self.wcd_data[entity_idx]
                     except Exception as e:
                         logger.debug(f"CT {ct_number} - Error in name lookup: {str(e)}")
@@ -199,7 +202,7 @@ class DataManager:
                     try:
                         model_data = ModelData(
                             name=name,
-                            type=self._get_class_name(class_type),
+                            type=self._get_type_name(entity_type),
                             ct_number=ct_number,
                             type_number=entity_idx,
                             bml_version=1,  # Default for now
@@ -254,12 +257,13 @@ class DataManager:
             logger.error(f"Error loading CT file: {str(e)}")
             return False
     
-    def _get_class_name(self, class_type: int) -> str:
-        if class_type == 2:
+    def _get_type_name(self, entity_type: int) -> str:
+        """Get the type name based on EntityType."""
+        if entity_type == 1:
             return "Feature"
-        elif class_type == 7:
+        elif entity_type == 5:
             return "Vehicle"
-        elif class_type == 8:
+        elif entity_type == 6:
             return "Weapon"
         return "Unknown"
     
@@ -559,17 +563,11 @@ class DataManager:
 
 
     def get_bml2_textures(self, parent_number: int) -> List[Dict[str, str]]:
-        """Get PBR textures from materials.mtl file for a given parent number.
-        
-        Args:
-            parent_number: The parent number to get textures for.
-            
-        Returns:
-            A list of dictionaries containing texture information with keys:
-            - name: The texture filename
-            - type: The texture type (e.g. BaseColor, Normal, ARMW)
-            - path: The path relative to the base folder
-        """
+        """Get PBR textures from materials.mtl file for a given parent number."""
+        # Check cache first
+        if hasattr(self, '_bml2_texture_cache') and parent_number in self._bml2_texture_cache:
+            return self._bml2_texture_cache[parent_number]
+
         textures = []
         
         # Get parent data
@@ -583,7 +581,6 @@ class DataManager:
         if os.path.exists(mtl_suggested_path):
             mtl_path = mtl_suggested_path      
         else:
-            logger.warning(f"No materials.mtl found for parent {parent_number}")
             return textures
         
         # Parse materials.mtl file
@@ -618,11 +615,9 @@ class DataManager:
                     # Split path and filename
                     path_parts = base_name.split('/')
                     if len(path_parts) > 1:
-                        # There's a path component
-                        texture_name = path_parts[-1]  # Last part is the filename
-                        texture_path = os.path.join("Models", *path_parts[:-1]) # Place real location of the texture
+                        texture_name = path_parts[-1]
+                        texture_path = os.path.join("Models", *path_parts[:-1])
                     else:
-                        # No path component, texture is in the parent's folder
                         texture_name = base_name
                         texture_path = os.path.join("Models", str(parent_number))
                     
@@ -637,7 +632,13 @@ class DataManager:
             
             # Convert unique textures to list
             textures = list(unique_textures.values())
-            logger.debug(f"Found {len(textures)} unique textures for parent {parent_number}")
+            
+            # Initialize cache if not exists
+            if not hasattr(self, '_bml2_texture_cache'):
+                self._bml2_texture_cache = {}
+            
+            # Cache the results
+            self._bml2_texture_cache[parent_number] = textures
             
         except Exception as e:
             logger.error(f"Error parsing materials.mtl for parent {parent_number}: {str(e)}")
@@ -724,6 +725,7 @@ class DataManager:
                     # Look for 3dCkpit.dat in the corresponding CkptArt folder
                     ckpit_file = os.path.join(ckptart_path, cockpit_name, "3dCkpit.dat")
                     if not os.path.exists(ckpit_file):
+                        logger.warning(f"Missing 3dCkpit.dat for {cockpit_name}")
                         continue
                         
                     # Parse 3dCkpit.dat
@@ -738,31 +740,36 @@ class DataManager:
                             try:
                                 parent_num = int(line.split()[1].rstrip(';'))
                                 parent_info.append((parent_num, "Cockpit", "Cockpit"))
-                            except ValueError:
+                            except ValueError as e:
+                                logger.warning(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
                                 continue
                         elif line.startswith('cockpitmodel2 '):
                             try:
                                 parent_num = int(line.split()[1].rstrip(';'))
                                 parent_info.append((parent_num, "Cockpit", "Switches and Knobs"))
-                            except ValueError:
+                            except ValueError as e:
+                                logger.warning(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
                                 continue
                         elif line.startswith('cockpithudmodel '):
                             try:
                                 parent_num = int(line.split()[1].rstrip(';'))
                                 parent_info.append((parent_num, "Cockpit", "HUD and Glass"))
-                            except ValueError:
+                            except ValueError as e:
+                                logger.warning(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
                                 continue
                         elif line.startswith('cockpitrttcanopymodel '):
                             try:
                                 parent_num = int(line.split()[1].rstrip(';'))
                                 parent_info.append((parent_num, "Cockpit", "Additional Canopy"))
-                            except ValueError:
+                            except ValueError as e:
+                                logger.warning(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
                                 continue
                         elif line.startswith('cockpitcanopymodel '):
                             try:
                                 parent_num = int(line.split()[1].rstrip(';'))
                                 parent_info.append((parent_num, "Cockpit", "Canopy"))
-                            except ValueError:
+                            except ValueError as e:
+                                logger.warning(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
                                 continue
                     
                     # Add cockpit wings parent if found
@@ -786,13 +793,11 @@ class DataManager:
                                 outsourced=False
                             )
                             self.parents[parent_num] = parent_data
-                            logger.info(f"Added cockpit parent {parent_num} ({model_type}) from {cockpit_name}")
                         else:
                             # Update only the cockpit-specific information
                             self.parents[parent_num].model_name = f"{cockpit_name} {model_type}"
                             self.parents[parent_num].model_type = model_type
                             self.parents[parent_num].type = type_
-                            logger.info(f"Updated cockpit parent {parent_num} ({model_type}) from {cockpit_name}")
                 
                 except Exception as e:
                     logger.error(f"Error processing {txtpb_file}: {str(e)}")
@@ -802,4 +807,214 @@ class DataManager:
             
         except Exception as e:
             logger.error(f"Error loading cockpit parents: {str(e)}")
+            return False
+
+    def load_parents_from_models_folder(self) -> bool:
+        """Load parent data from Models folder when PDR is not available."""
+        try:
+            if not self.base_folder:
+                logger.error("Base folder not set")
+                return False
+
+            models_path = os.path.join(self.base_folder, "Models")
+            if not os.path.exists(models_path):
+                logger.error(f"Models folder not found at: {models_path}")
+                return False
+
+            # Track all parent numbers to identify missing ones later
+            found_parents = set()
+            bml2_parents = set()  # Track BML2 parents for later texture processing
+
+            # First pass: identify all existing parents and BML2 parents
+            for folder_name in os.listdir(models_path):
+                try:
+                    if not folder_name.isdigit():
+                        continue
+
+                    parent_number = int(folder_name)
+                    found_parents.add(parent_number)
+                    folder_path = os.path.join(models_path, folder_name)
+                    
+                    # Check if materials.mtl exists to determine BML version
+                    materials_file = os.path.join(folder_path, "materials.mtl")
+                    if os.path.exists(materials_file):
+                        bml2_parents.add(parent_number)
+
+                except Exception as e:
+                    logger.error(f"Error checking parent folder {folder_name}: {str(e)}")
+                    continue
+
+            # Second pass: process all models and update their BML versions
+            for model in self.models.values():
+                # Initialize BML versions set for the model
+                if not hasattr(model, 'bml_versions'):
+                    model.bml_versions = set()
+
+                # Check each parent reference in the model
+                for parent_attr in ['normal_model', 'fixed_model', 'damaged_model', 'destroyed_model', 
+                                  'left_destroyed_model', 'right_destroyed_model', 'both_models_destroyed']:
+                    parent_num = getattr(model, parent_attr)
+                    if parent_num and parent_num.isdigit():
+                        parent_number = int(parent_num)
+                        if parent_number in bml2_parents:
+                            model.bml_versions.add(2)  # BML2 if materials.mtl exists
+                        elif parent_number in found_parents:
+                            model.bml_versions.add(1)  # BML1 if folder exists but no materials.mtl
+                        else:
+                            model.bml_versions.add(-1)  # BML-1 if parent doesn't exist
+
+            # Third pass: create parent data objects and process BML2 textures
+            for folder_name in os.listdir(models_path):
+                try:
+                    if not folder_name.isdigit():
+                        continue
+
+                    parent_number = int(folder_name)
+                    folder_path = os.path.join(models_path, folder_name)
+                    
+                    # Determine BML version
+                    materials_file = os.path.join(folder_path, "materials.mtl")
+                    bml_version = 2 if os.path.exists(materials_file) else 1
+
+                    # Find associated model
+                    model_data = None
+                    for model in self.models.values():
+                        if (model.normal_model == str(parent_number) or
+                            model.fixed_model == str(parent_number) or
+                            model.destroyed_model == str(parent_number) or
+                            model.left_destroyed_model == str(parent_number) or
+                            model.right_destroyed_model == str(parent_number) or
+                            model.both_models_destroyed == str(parent_number) or
+                            model.damaged_model == str(parent_number)):
+                            model_data = model
+                            break
+
+                    # Create parent data
+                    if model_data:
+                        model_types = []
+                        if model_data.normal_model == str(parent_number):
+                            model_types.append("Normal")
+                        if model_data.fixed_model == str(parent_number):
+                            model_types.append("Repaired")
+                        if model_data.damaged_model == str(parent_number):
+                            model_types.append("Damaged")
+                        if model_data.destroyed_model == str(parent_number):
+                            model_types.append("Destroyed")
+                        if model_data.left_destroyed_model == str(parent_number):
+                            model_types.append("Left Destroyed")
+                        if model_data.right_destroyed_model == str(parent_number):
+                            model_types.append("Right Destroyed")
+                        if model_data.both_models_destroyed == str(parent_number):
+                            model_types.append("Both Destroyed")
+
+                        # Special case: if both Normal and Repaired are present, only show Normal
+                        if "Normal" in model_types and "Repaired" in model_types:
+                            model_types = [t for t in model_types if t != "Repaired"]
+
+                        model_type = ", ".join(model_types)
+
+                        parent_data = ParentData(
+                            parent_number=parent_number,
+                            bml_version=bml_version,
+                            textures=[],  # Will be populated later for BML2
+                            model_name=model_data.name,
+                            model_type=model_type,
+                            type=model_data.type,
+                            ct_number=model_data.ct_number,
+                            entity_idx=model_data.type_number,
+                            outsourced=False
+                        )
+                    else:
+                        # Parent exists but no associated model
+                        parent_data = ParentData(
+                            parent_number=parent_number,
+                            bml_version=bml_version,
+                            textures=[],
+                            model_name="",
+                            model_type="",
+                            type="",
+                            ct_number=0,
+                            entity_idx=0,
+                            outsourced=False
+                        )
+
+                    self.parents[parent_number] = parent_data
+
+                    # Process BML2 textures
+                    if bml_version == 2:
+                        if os.path.exists(materials_file):
+                            try:
+                                textures = self.get_bml2_textures(parent_number)
+                                for texture in textures:
+                                    texture_id = texture['name']
+                                    texture_type = texture['type']
+                                    texture_path = texture['path']
+
+                                    # Create or update texture data
+                                    if texture_id not in self.textures:
+                                        texture_data = TextureData(
+                                            texture_id=texture_id,
+                                            parent_models=[],
+                                            high_res=False,
+                                            pbr=[],
+                                            pbr_type=[],
+                                            availability=True
+                                        )
+                                        self.textures[texture_id] = texture_data
+
+                                    # Add parent to texture's parent_models if not already there
+                                    if parent_data not in self.textures[texture_id].parent_models:
+                                        self.textures[texture_id].parent_models.append(parent_data)
+
+                                    # Check if texture files exist
+                                    base_path = os.path.join(self.base_folder, texture_path)
+                                    texture_file = os.path.join(base_path, f"{texture_id}.dds")
+                                    
+                                    # Update texture data based on file existence
+                                    self.textures[texture_id].availability = os.path.exists(texture_file)
+
+                                    # For PBR textures, check and add variants
+                                    if texture_type in ["Normal", "ARMW"]:
+                                        if texture_type == "Normal" and texture_id not in self.textures[texture_id].pbr:
+                                            self.textures[texture_id].pbr.append(texture_id)
+                                            self.textures[texture_id].pbr_type.append("normal")
+                                        elif texture_type == "ARMW" and texture_id not in self.textures[texture_id].pbr:
+                                            self.textures[texture_id].pbr.append(texture_id)
+                                            self.textures[texture_id].pbr_type.append("armw")
+
+                            except Exception as e:
+                                logger.error(f"Error processing materials.mtl for parent {parent_number}: {str(e)}")
+                        else:
+                            logger.warning(f"No materials.mtl found for parent {parent_number}")
+
+                except Exception as e:
+                    logger.error(f"Error processing parent folder {folder_name}: {str(e)}")
+                    continue
+
+            # Add missing parents as BML version -1
+            for model in self.models.values():
+                for parent_attr in ['normal_model', 'fixed_model', 'damaged_model', 'destroyed_model', 
+                                  'left_destroyed_model', 'right_destroyed_model', 'both_models_destroyed']:
+                    parent_num = getattr(model, parent_attr)
+                    if parent_num and parent_num.isdigit():
+                        parent_number = int(parent_num)
+                        if parent_number not in found_parents and parent_number not in self.parents:
+                            parent_data = ParentData(
+                                parent_number=parent_number,
+                                bml_version=-1,
+                                textures=[],
+                                model_name=model.name,
+                                model_type="Missing",
+                                type=model.type,
+                                ct_number=model.ct_number,
+                                entity_idx=model.type_number,
+                                outsourced=True
+                            )
+                            self.parents[parent_number] = parent_data
+
+            logger.info(f"Completed loading from Models folder. Found {len(bml2_parents)} BML2 parents and {len(self.textures)} textures")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error loading parents from Models folder: {str(e)}")
             return False
