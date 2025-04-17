@@ -1409,7 +1409,7 @@ class ParentsFrame(ctk.CTkFrame):
         self.type_menu = ctk.CTkOptionMenu(
             self.search_frame,
             variable=self.type_var,
-            values=["All", "Cockpit"],
+            values=["All", "Feature", "Vehicle", "Weapon", "Cockpit"],
             command=self.filter_parents,
             font=ctk.CTkFont(size=self.base_font_size),
             fg_color="#7A92A9",
@@ -1650,25 +1650,52 @@ class ParentsFrame(ctk.CTkFrame):
         type_filter = self.type_var.get()
         search_text = self.search_entry.get().lower()
         
+        # Clear filtered parents list
         self.filtered_parents = []
+        
+        # Count for status
+        total_parents = 0
+        filtered_count = 0
+        
         for parent in self.parents:
+            total_parents += 1
+            
             # Get parent data
             parent_data = self.master.master.data_manager.parents.get(parent)
             if not parent_data:
                 continue
-                
-            # Apply type filter
-            if type_filter != "All" and parent_data.type != type_filter:
+            
+            # Check type filter
+            passes_type = False
+            if type_filter == "All":
+                passes_type = True
+            elif type_filter == "Cockpit":
+                passes_type = parent_data.type == "Cockpit"
+            else:
+                passes_type = parent_data.type == type_filter and parent_data.type != "Cockpit"
+            
+            if not passes_type:
                 continue
-                
-            # Apply search filter
-            if search_text and search_text not in str(parent):
-                continue
-                
+            
+            # Check search filter
+            if search_text:
+                if str(parent).lower().find(search_text) == -1 and parent_data.model_name.lower().find(search_text) == -1:
+                    continue
+            
+            # If we get here, the parent passed all filters
             self.filtered_parents.append(parent)
+            filtered_count += 1
         
+        # Update display
         self._update_parents_display()
-        self.status_label.configure(text=f"Showing {len(self.filtered_parents)} of {len(self.parents)} parents")
+        
+        # Update status label with counts
+        if type_filter != "All":
+            type_count = sum(1 for p in self.parents if self.master.master.data_manager.parents.get(p) and 
+                           self.master.master.data_manager.parents.get(p).type == type_filter)
+            self.status_label.configure(text=f"Showing {filtered_count} of {type_count} {type_filter} parents")
+        else:
+            self.status_label.configure(text=f"Showing {filtered_count} of {total_parents} parents")
     
     def search_parents(self, *args):
         """Search parents based on input text."""
@@ -1729,15 +1756,28 @@ class ParentsFrame(ctk.CTkFrame):
         # Get parent data from data manager
         parent_data = self.master.master.data_manager.parents.get(int(parent_number))
         if parent_data:
-            # Add parent information
-            self.info_tree.insert("", "end", values=(
-                str(parent_data.bml_version),
-                parent_data.model_name,
-                parent_data.model_type,
-                parent_data.type,
-                str(parent_data.ct_number),
-                str(parent_data.entity_idx)
-            ))
+            # If this is a cockpit parent with multiple aircraft variants
+            if hasattr(parent_data, 'aircraft_variants') and parent_data.aircraft_variants:
+                # Add an entry for each aircraft variant
+                for aircraft_name, model_type in parent_data.aircraft_variants.items():
+                    self.info_tree.insert("", "end", values=(
+                        str(parent_data.bml_version),
+                        aircraft_name,
+                        model_type,
+                        parent_data.type,
+                        str(parent_data.ct_number),
+                        str(parent_data.entity_idx)
+                    ))
+            else:
+                # Add single entry for non-cockpit or single-aircraft parent
+                self.info_tree.insert("", "end", values=(
+                    str(parent_data.bml_version),
+                    parent_data.model_name,
+                    parent_data.model_type,
+                    parent_data.type,
+                    str(parent_data.ct_number),
+                    str(parent_data.entity_idx)
+                ))
             
             # Add texture information based on BML version only
             if parent_data.bml_version == 2:
@@ -1774,7 +1814,6 @@ class ParentsFrame(ctk.CTkFrame):
                                         pbr_type.upper(),
                                         "KoreaObj"  # Only show the path
                                     ))
-            # For BML version -1, no textures are shown as they are not available
 
     def show_legend(self):
         # Store original color if not stored

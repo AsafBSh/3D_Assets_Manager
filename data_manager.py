@@ -12,7 +12,7 @@ logger.add(
     "logs/data_manager.log",
     rotation="10 MB",
     format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {function}:{line} | {message}",
-    level="DEBUG",  # Set to DEBUG to capture all log levels
+    level="INFO",  # Change to INFO level to reduce debug messages
     enqueue=True,  # Enable thread-safe logging
     backtrace=True,  # Include backtrace for errors
     diagnose=True   # Include diagnostic information
@@ -38,8 +38,7 @@ class DataManager:
         """Set paths to KoreaObj folders."""
         self.korea_obj_path = os.path.join(os.path.dirname(base_path), "KoreaObj")
         self.korea_obj_hires_path = os.path.join(os.path.dirname(base_path), "KoreaObj_HiRes")
-        logger.info(f"Set KoreaObj path: {self.korea_obj_path}")
-        logger.info(f"Set KoreaObj_HiRes path: {self.korea_obj_hires_path}")
+        
     
     def check_texture_files(self, texture_id: str) -> tuple:
         """Check texture files in KoreaObj folders and return TextureData."""
@@ -54,13 +53,10 @@ class DataManager:
         base_pattern = os.path.join(self.korea_obj_path, f"{texture_id}.dds")
         if os.path.exists(base_pattern):
             base_exists = True
-            logger.debug(f"Found base texture: {base_pattern}")
         
         # Check KoreaObj_HiRes for high-res texture
         hires_pattern = os.path.join(self.korea_obj_hires_path, f"{texture_id}.dds")
         texture_data.high_res = os.path.exists(hires_pattern)
-        if texture_data.high_res:
-            logger.debug(f"Found high-res texture: {hires_pattern}")
         
         # Check for PBR textures in KoreaObj
         normal_file = os.path.join(self.korea_obj_path, f"{texture_id}_normal.dds")
@@ -74,21 +70,17 @@ class DataManager:
         if os.path.exists(normal_file):
             texture_data.pbr.append(f"{texture_id}_normal")
             texture_data.pbr_type.append("normal")
-            logger.debug(f"Found normal map: {normal_file}")
         
         if os.path.exists(armw_file):
             texture_data.pbr.append(f"{texture_id}_armw")
             texture_data.pbr_type.append("armw")
-            logger.debug(f"Found ARMW map: {armw_file}")
         
         # Add high-res PBR files
         if os.path.exists(hires_normal):
             texture_data.high_res = True
-            logger.debug(f"Found high-res normal map: {hires_normal}")
         
         if os.path.exists(hires_armw):
             texture_data.high_res = True
-            logger.debug(f"Found high-res ARMW map: {hires_armw}")
         
         return texture_data, base_exists
     
@@ -124,6 +116,8 @@ class DataManager:
             self.models.clear()
             self.parents.clear()
             self.textures.clear()
+            self.unused_textures.clear()  # Clear unused textures list
+            self.pdr_file = None  # Clear PDR file path
             
             # Load associated data files from the same directory
             base_dir = os.path.dirname(file_path)
@@ -226,12 +220,11 @@ class DataManager:
                                 self.models[ct_num] = model
                             current_batch.clear()
                             
-                            # Log progress
+                            # Log progress every 1000 models
                             if models_loaded % 1000 == 0:
                                 logger.info(f"Processed {models_loaded} valid models ({(models_found/total_models)*100:.1f}% complete)")
                         
-                    except Exception as e:
-                        logger.debug(f"CT {ct_number} - Error creating ModelData: {str(e)}")
+                    except Exception:
                         continue
                     
                 except Exception as e:
@@ -243,13 +236,7 @@ class DataManager:
                 self.models[ct_num] = model
             
             self.ct_file = file_path
-            logger.info(f"Found {models_found} model elements in CT file")
             logger.info(f"Successfully loaded {models_loaded} valid models from CT file")
-            
-            # Log some sample data if available
-            if self.models:
-                sample_ct = next(iter(self.models.values()))
-                logger.info(f"Sample model data - CT: {sample_ct.ct_number}, Type: {sample_ct.type}, Name: {sample_ct.name}")
             
             return True
             
@@ -513,7 +500,6 @@ class DataManager:
             }
             
             total_lines = sum(1 for line in open(file_path)) - 1  # Subtract header line
-            logger.info(f"Loaded {len(self.unused_textures)} unique unused textures from {total_lines} entries")
             return True
             
         except Exception as e:
@@ -647,14 +633,7 @@ class DataManager:
         return textures
 
     def load_cockpit_parents(self, base_path: str) -> bool:
-        """Load cockpit parent data from Acdata and CkptArt folders.
-        
-        Args:
-            base_path: Path to the Falcon4_CT.xml file
-            
-        Returns:
-            bool: True if any cockpit parents were loaded successfully
-        """
+        """Load cockpit parent data from Acdata and CkptArt folders."""
         try:
             # Get root path (up to Terrdata/Objects)
             root_path = os.path.dirname(os.path.dirname(os.path.dirname(base_path)))
@@ -699,6 +678,8 @@ class DataManager:
             if not ckptart_path:
                 logger.warning("Could not find CkptArt folder")
                 return False
+
+            cockpits_found = 0
             
             # Process all .txtpb files in Acdata
             for txtpb_file in glob.glob(os.path.join(acdata_path, "*.txtpb")):
@@ -706,9 +687,10 @@ class DataManager:
                     with open(txtpb_file, 'r') as f:
                         content = f.read()
                         
-                    # Extract cockpit_name and cockpit_wings_parent
+                    # Extract cockpit_name, cockpit_wings_parent, and type_ac
                     cockpit_name = None
                     cockpit_wings = None
+                    type_ac = "NONE"
                     
                     for line in content.split('\n'):
                         if "cockpit_name" in line:
@@ -718,6 +700,18 @@ class DataManager:
                                 cockpit_wings = int(line.split()[-1])
                             except ValueError:
                                 continue
+                        elif "type_ac:" in line:
+                            type_ac = line.split(':')[1].strip()
+                    
+                    # If no cockpit_name but type_ac is not NONE, use the txtpb filename
+                    if (not cockpit_name or not cockpit_name.strip()) and type_ac != "NONE":
+                        txtpb_basename = os.path.splitext(os.path.basename(txtpb_file))[0]
+                        ckpit_folder = os.path.join(ckptart_path, txtpb_basename)
+                        ckpit_file = os.path.join(ckpit_folder, "3dCkpit.dat")
+                        
+                        if os.path.exists(ckpit_file):
+                            logger.info(f"Found cockpit for {txtpb_basename} using type_ac: {type_ac}")
+                            cockpit_name = txtpb_basename
                     
                     if not cockpit_name:
                         continue
@@ -772,14 +766,17 @@ class DataManager:
                                 logger.warning(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
                                 continue
                     
-                    # Add cockpit wings parent if found
-                    if cockpit_wings:
+                    # Add cockpit wings parent if found and not -1
+                    if cockpit_wings and cockpit_wings != -1:
                         parent_info.append((cockpit_wings, "Cockpit", "Cockpit Wings"))
                     
                     # Create ParentData objects for each parent
                     for parent_num, type_, model_type in parent_info:
-                        # Only create new parent data if it doesn't exist
-                        # This ensures we don't override texture information from PDR file
+                        # Skip invalid parent numbers
+                        if parent_num <= 0:
+                            continue
+
+                        # Create new parent data if it doesn't exist
                         if parent_num not in self.parents:
                             parent_data = ParentData(
                                 parent_number=parent_num,
@@ -787,22 +784,24 @@ class DataManager:
                                 textures=[],  # Empty list as textures should come from PDR file
                                 model_name=f"{cockpit_name} {model_type}",
                                 model_type=model_type,
-                                type=type_,
+                                type=type_,  # This should be "Cockpit"
                                 ct_number=0,  # No CT number for cockpit models
                                 entity_idx=0,  # No entity index for cockpit models
                                 outsourced=False
                             )
                             self.parents[parent_num] = parent_data
+                            cockpits_found += 1
                         else:
-                            # Update only the cockpit-specific information
+                            # Update existing parent's type and model info
+                            self.parents[parent_num].type = type_  # Ensure type is set to "Cockpit"
                             self.parents[parent_num].model_name = f"{cockpit_name} {model_type}"
                             self.parents[parent_num].model_type = model_type
-                            self.parents[parent_num].type = type_
                 
                 except Exception as e:
                     logger.error(f"Error processing {txtpb_file}: {str(e)}")
                     continue
             
+            logger.info(f"Successfully loaded {cockpits_found} cockpit parents")
             return True
             
         except Exception as e:

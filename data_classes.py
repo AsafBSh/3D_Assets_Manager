@@ -32,6 +32,7 @@ class ParentData:
     entity_idx: int
     outsourced: bool = False  # Flag for -1 (outsourced) parents
     pbr: bool = False  # Flag for PBR state
+    aircraft_variants: Dict[str, str] = field(default_factory=dict)  # Dict of aircraft name to model type
 
 @dataclass
 class TextureData:

@@ -108,8 +108,8 @@ class BMSManager(ctk.CTk):
         self.data_manager = DataManager()
         
         # Configure main window
-        self.title("3D Assets Manager v0.95")
-        self.geometry("1370x730")
+        self.title("3D Assets Manager v0.98")
+        self.geometry("1370x750")
         self.minsize(800, 600)  # Set minimum window size
         
         # Set window background color
@@ -432,6 +432,13 @@ class BMSManager(ctk.CTk):
                 frame = ParentsFrame(self.main_frame)
                 if self.data_manager.ct_file:
                     logger.info("Updating parents frame with loaded data")
+                    
+                    # Load parents from Models folder if PDR is not available
+                    if not self.data_manager.pdr_file and not hasattr(self.data_manager, 'parents_loaded_from_models'):
+                        logger.info("Loading parents from Models folder")
+                        self.data_manager.load_parents_from_models_folder()
+                        self.data_manager.parents_loaded_from_models = True
+                    
                     # Load cockpit parents if not already loaded
                     if not hasattr(self.data_manager, 'cockpit_parents_loaded'):
                         logger.info("Loading cockpit parents data")
@@ -443,6 +450,13 @@ class BMSManager(ctk.CTk):
                     if parents:
                         logger.info(f"Found {len(parents)} parents to display")
                         frame.update_list(parents)
+                        # Log count of each type for debugging
+                        type_counts = {}
+                        for parent in parents:
+                            parent_data = self.data_manager.parents.get(parent)
+                            if parent_data:
+                                type_counts[parent_data.type] = type_counts.get(parent_data.type, 0) + 1
+                        logger.info(f"Parent type counts: {type_counts}")
                     else:
                         logger.warning("No parents found in data manager")
             elif name == "unused":
@@ -459,26 +473,18 @@ class BMSManager(ctk.CTk):
                             else:
                                 logger.warning("No unused textures found")
             elif name == "pbr":
-                try:
-                    frame = PBRTexturesFrame(self.main_frame, self.data_manager, self.dpi)
-                    # Wait for frame to be ready
-                    self.update_idletasks()
-                    frame.update_idletasks()
-                    
-                    if self.data_manager.pdr_file:
-                        logger.info("Updating PBR textures frame with PDR file")
-                        frame.update_list()
-                    else:
-                        logger.info("Updating PBR textures frame without PDR file")
-                        # Load parents from Models folder if PDR is not available
-                        if not hasattr(self.data_manager, 'parents_loaded_from_models'):
-                            logger.info("Loading parents from Models folder")
-                            self.data_manager.load_parents_from_models_folder()
-                            self.data_manager.parents_loaded_from_models = True
-                        frame.update_list()
-                except Exception as e:
-                    logger.exception(f"Error initializing PBR frame: {str(e)}")
-                    raise
+                frame = PBRTexturesFrame(self.main_frame, self.data_manager, self.dpi)
+                # Wait for frame to be ready
+                self.update_idletasks()
+                frame.update_idletasks()
+                if self.data_manager.pdr_file:
+                    frame.update_list()
+                else:
+                    # Load parents from Models folder if PDR is not available
+                    if not hasattr(self.data_manager, 'parents_loaded_from_models'):
+                        self.data_manager.load_parents_from_models_folder()
+                        self.data_manager.parents_loaded_from_models = True
+                    frame.update_list()
             
             if frame:
                 # Wait for frame to be ready
@@ -496,7 +502,7 @@ class BMSManager(ctk.CTk):
                 
                 # Update the frame
                 frame.update_idletasks()
-                
+            
         except Exception as e:
             logger.error(f"Error creating {name} frame: {str(e)}")
             logger.error("Stack trace:", exc_info=True)
