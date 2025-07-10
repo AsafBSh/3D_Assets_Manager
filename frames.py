@@ -3,10 +3,12 @@ from PIL import Image, ImageTk
 from typing import List, Callable, Optional
 from data_manager import ModelData, TextureData
 from loguru import logger
-from tkinter import ttk
+from tkinter import ttk, messagebox
 import ctypes
 import threading
 import os
+import datetime
+import math
 
 # Configure logger
 logger.remove()  # Remove any existing handlers
@@ -175,10 +177,11 @@ class ModelsFrame(ctk.CTkFrame):
         # Search frame with new color
         self.search_frame = ctk.CTkFrame(self)
         self.search_frame.grid(row=0, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
-        self.search_frame.grid_columnconfigure(2, weight=1)  # Make search entry expandable
+        self.search_frame.grid_columnconfigure(3, weight=1)  # Make search entry expandable
         self.search_frame.grid_columnconfigure(0, weight=0)  # Legend button fixed
-        self.search_frame.grid_columnconfigure(1, weight=0)  # Type filter fixed
-        self.search_frame.grid_columnconfigure(3, weight=0)  # Search button fixed
+        self.search_frame.grid_columnconfigure(1, weight=0)  # Version filter fixed
+        self.search_frame.grid_columnconfigure(2, weight=0)  # Type filter fixed
+        self.search_frame.grid_columnconfigure(4, weight=0)  # Search button fixed
         self.search_frame.configure(fg_color="#D4E5F2")  # Lighter shade for search frame
         
         # Add legend button with new colors
@@ -192,6 +195,24 @@ class ModelsFrame(ctk.CTkFrame):
             text_color="#FFFFFF"
         )
         self.legend_button.grid(row=0, column=0, padx=5, pady=5)
+        
+        # Version filter with new colors
+        self.color_var = ctk.StringVar(value="All BMLs")
+        self.color_menu = ctk.CTkOptionMenu(
+            self.search_frame,
+            variable=self.color_var,
+            values=["All BMLs", "Version 2", "Versions -1/1 & 2", "Version -1", "Version -1 & 1"],
+            command=self.filter_models,
+            font=ctk.CTkFont(size=self.base_font_size),
+            fg_color="#7A92A9",
+            button_color="#6E8499",
+            button_hover_color="#5D7388",
+            text_color="#FFFFFF",
+            dropdown_fg_color="#7A92A9",
+            dropdown_hover_color="#6E8499",
+            dropdown_text_color="#FFFFFF"
+        )
+        self.color_menu.grid(row=0, column=1, padx=5, pady=5)
         
         # Type filter with new colors
         self.type_var = ctk.StringVar(value="All")
@@ -209,7 +230,7 @@ class ModelsFrame(ctk.CTkFrame):
             dropdown_hover_color="#6E8499",
             dropdown_text_color="#FFFFFF"
         )
-        self.type_menu.grid(row=0, column=1, padx=5, pady=5)
+        self.type_menu.grid(row=0, column=2, padx=5, pady=5)
         
         # Search entry with new colors
         self.search_entry = ctk.CTkEntry(
@@ -220,7 +241,7 @@ class ModelsFrame(ctk.CTkFrame):
             border_color="#7A92A9",
             text_color="#2D3B45"
         )
-        self.search_entry.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
+        self.search_entry.grid(row=0, column=3, padx=5, pady=5, sticky="ew")
         self.search_entry.bind("<Return>", self.filter_models)
         
         # Search button with new colors
@@ -233,7 +254,7 @@ class ModelsFrame(ctk.CTkFrame):
             hover_color="#6E8499",
             text_color="#FFFFFF"
         )
-        self.search_button.grid(row=0, column=3, padx=5, pady=5)
+        self.search_button.grid(row=0, column=4, padx=5, pady=5)
         
         # Status label with new colors
         self.status_label = ctk.CTkLabel(
@@ -242,7 +263,7 @@ class ModelsFrame(ctk.CTkFrame):
             font=ctk.CTkFont(size=self.base_font_size),
             text_color="#2D3B45"
         )
-        self.status_label.grid(row=1, column=0, columnspan=3, padx=5, pady=(0, 5), sticky="ew")
+        self.status_label.grid(row=1, column=0, columnspan=5, padx=5, pady=(0, 5), sticky="ew")
         
         # Create table frame with new color
         self.table_frame = ctk.CTkFrame(self)
@@ -415,6 +436,32 @@ class ModelsFrame(ctk.CTkFrame):
         self.update()
         self.filter_models()
     
+    def _get_model_color_tag(self, model):
+        """Get the color tag for a model based on its BML versions."""
+        bml_versions = self.master.master.data_manager.get_model_bml_versions(model)
+        
+        if bml_versions == "2":
+            return "bml2"
+        elif bml_versions == "1, 2":
+            return "bml1_2"
+        elif bml_versions == "-1":
+            return "bml_1"
+        elif bml_versions == "-1, 1":
+            return "bml_1_1"
+        elif bml_versions == "-1, 2" or bml_versions == "-1, 1, 2":
+            return "bml1_2"  # Use the same light green color for -1 + 2
+        return ""
+    
+    def _color_name_to_tag(self, color_name):
+        """Map version filter names to tag names."""
+        color_map = {
+            "Version 2": "bml2",
+            "Versions -1/1 & 2": "bml1_2", 
+            "Version -1": "bml_1",
+            "Version -1 & 1": "bml_1_1"
+        }
+        return color_map.get(color_name, "")
+    
     def filter_models(self, *args):
         # Update status
         self.status_label.configure(text="Filtering models...")
@@ -422,14 +469,24 @@ class ModelsFrame(ctk.CTkFrame):
         
         # Get filter values
         type_filter = self.type_var.get()
+        color_filter = self.color_var.get()
         search_text = self.search_entry.get().lower()
         
         # Filter models
         self.filtered_models = []
         for model in self.models:
+            # Type filter
             if type_filter != "All" and model.type != type_filter:
                 continue
             
+            # Version filter
+            if color_filter != "All BMLs":
+                model_tag = self._get_model_color_tag(model)
+                expected_tag = self._color_name_to_tag(color_filter)
+                if model_tag != expected_tag:
+                    continue
+            
+            # Search text filter
             if search_text and search_text not in model.name.lower() and search_text not in str(model.ct_number):
                 continue
             
@@ -437,7 +494,13 @@ class ModelsFrame(ctk.CTkFrame):
         
         # Sort if needed
         if self.current_sort:
-            self.sort_models(self.filtered_models, self.current_sort)
+            # Re-sort the filtered models using the current sort column
+            if self.current_sort == "ct":
+                self.filtered_models.sort(key=lambda x: x.ct_number, reverse=not self.sort_ascending)
+            elif self.current_sort == "type":
+                self.filtered_models.sort(key=lambda x: x.type, reverse=not self.sort_ascending)
+            elif self.current_sort == "name":
+                self.filtered_models.sort(key=lambda x: x.name.lower(), reverse=not self.sort_ascending)
         
         # Update display
         self._update_display()
@@ -452,21 +515,8 @@ class ModelsFrame(ctk.CTkFrame):
         
         # Add models to tree
         for model in self.filtered_models:
-            # Get BML versions for the model
-            bml_versions = self.master.master.data_manager.get_model_bml_versions(model)
-            
-            # Determine tag based on BML versions
-            tag = ""
-            if bml_versions == "2":
-                tag = "bml2"
-            elif bml_versions == "1, 2":
-                tag = "bml1_2"
-            elif bml_versions == "-1":
-                tag = "bml_1"
-            elif bml_versions == "-1, 1":
-                tag = "bml_1_1"
-            elif bml_versions == "-1, 2" or bml_versions == "-1, 1, 2":
-                tag = "bml1_2"  # Use the same light green color for -1 + 2
+            # Get color tag for this model
+            tag = self._get_model_color_tag(model)
             
             # Insert item with appropriate tag
             self.tree.insert("", "end", values=(model.ct_number, model.type, model.name), tags=(tag,))
@@ -653,9 +703,10 @@ class TexturesFrame(ctk.CTkFrame):
         # Search frame with new color
         self.search_frame = ctk.CTkFrame(self)
         self.search_frame.grid(row=0, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
-        self.search_frame.grid_columnconfigure(1, weight=1)  # Make search entry expandable
+        self.search_frame.grid_columnconfigure(2, weight=1)  # Make search entry expandable
         self.search_frame.grid_columnconfigure(0, weight=0)  # Legend button fixed
-        self.search_frame.grid_columnconfigure(2, weight=0)  # Search button fixed
+        self.search_frame.grid_columnconfigure(1, weight=0)  # Color filter fixed
+        self.search_frame.grid_columnconfigure(3, weight=0)  # Search button fixed
         self.search_frame.configure(fg_color="#D4E5F2")  # Lighter shade for search frame
         
         # Add legend button with new colors
@@ -670,6 +721,24 @@ class TexturesFrame(ctk.CTkFrame):
         )
         self.legend_button.grid(row=0, column=0, padx=5, pady=5)
         
+        # Color filter with new colors
+        self.color_var = ctk.StringVar(value="All Types")
+        self.color_menu = ctk.CTkOptionMenu(
+            self.search_frame,
+            variable=self.color_var,
+            values=["All Types", "High & PBR", "PBR", "High", "No Texture"],
+            command=self.search_textures,
+            font=ctk.CTkFont(size=self.base_font_size),
+            fg_color="#7A92A9",
+            button_color="#6E8499",
+            button_hover_color="#5D7388",
+            text_color="#FFFFFF",
+            dropdown_fg_color="#7A92A9",
+            dropdown_hover_color="#6E8499",
+            dropdown_text_color="#FFFFFF"
+        )
+        self.color_menu.grid(row=0, column=1, padx=5, pady=5)
+        
         # Search entry with new colors
         self.search_entry = ctk.CTkEntry(
             self.search_frame,
@@ -679,7 +748,7 @@ class TexturesFrame(ctk.CTkFrame):
             border_color="#7A92A9",
             text_color="#2D3B45"
         )
-        self.search_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        self.search_entry.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
         self.search_entry.bind("<Return>", self.search_textures)
         
         # Search button with new colors
@@ -692,7 +761,7 @@ class TexturesFrame(ctk.CTkFrame):
             hover_color="#6E8499",
             text_color="#FFFFFF"
         )
-        self.search_button.grid(row=0, column=2, padx=5, pady=5)
+        self.search_button.grid(row=0, column=3, padx=5, pady=5)
         
         # Status label with new colors
         self.status_label = ctk.CTkLabel(
@@ -701,7 +770,7 @@ class TexturesFrame(ctk.CTkFrame):
             font=ctk.CTkFont(size=self.base_font_size),
             text_color="#2D3B45"
         )
-        self.status_label.grid(row=1, column=0, columnspan=2, padx=5, pady=(0, 5), sticky="ew")
+        self.status_label.grid(row=1, column=0, columnspan=4, padx=5, pady=(0, 5), sticky="ew")
         
         # Left side - Textures list frame with new color
         self.textures_frame = ctk.CTkFrame(self)
@@ -861,6 +930,34 @@ class TexturesFrame(ctk.CTkFrame):
         self.current_sort = None
         self.sort_ascending = True
     
+    def _get_texture_color_tag(self, texture_id):
+        """Get the color tag for a texture based on its properties."""
+        texture_data = self.master.master.data_manager.textures.get(str(texture_id))
+        
+        if not texture_data:
+            return "missing"  # No texture data means missing texture
+        
+        if not texture_data.availability:
+            return "missing"  # Red for missing textures
+        elif texture_data.high_res and texture_data.pbr:
+            return "both"  # Dark green for both high res and PBR
+        elif texture_data.pbr:
+            return "pbr"  # Light green for PBR only
+        elif texture_data.high_res:
+            return "highres"  # Light blue for high res only
+        else:
+            return ""  # Default case (no special properties)
+    
+    def _color_name_to_tag(self, color_name):
+        """Map color filter names to tag names."""
+        color_map = {
+            "High & PBR": "both",
+            "PBR": "pbr",
+            "High": "highres",
+            "No Texture": "missing"
+        }
+        return color_map.get(color_name, "")
+    
     def update_list(self, textures: List[str] = None):
         """Update the textures list with new data."""
         if textures is None:
@@ -899,22 +996,11 @@ class TexturesFrame(ctk.CTkFrame):
         
         # Add textures to tree
         for texture in self.filtered_textures:
-            # Get texture data
-            texture_data = self.master.master.data_manager.textures.get(str(texture))
-            tag = ()
+            # Get color tag for this texture
+            tag = self._get_texture_color_tag(texture)
             
-            if texture_data:
-                # Determine tag based on texture state
-                if not texture_data.availability:
-                    tag = ("missing",)
-                elif texture_data.high_res and texture_data.pbr:
-                    tag = ("both",)
-                elif texture_data.pbr:
-                    tag = ("pbr",)
-                elif texture_data.high_res:
-                    tag = ("highres",)
-            
-            self.textures_tree.insert("", "end", values=(str(texture),), tags=tag)
+            # Insert item with appropriate tag
+            self.textures_tree.insert("", "end", values=(str(texture),), tags=(tag,) if tag else ())
     
     def sort_textures(self, column):
         """Sort textures list."""
@@ -948,15 +1034,29 @@ class TexturesFrame(ctk.CTkFrame):
         self.textures_tree.heading("texture", text=f"Textures List{' ▼' if self.sort_ascending else ' ▲'}")
     
     def search_textures(self, *args):
-        """Search textures by name."""
+        """Search and filter textures by name and color type."""
         if not self.textures:  # Don't search if no data
             return
             
         search_text = self.search_entry.get().lower()
-        if not search_text:
-            self.filtered_textures = self.textures.copy()
-        else:
-            self.filtered_textures = [t for t in self.textures if search_text in str(t).lower()]
+        color_filter = self.color_var.get()
+        
+        # Filter textures
+        self.filtered_textures = []
+        for texture in self.textures:
+            # Check search text filter
+            if search_text and search_text not in str(texture).lower():
+                continue
+            
+            # Check color filter
+            if color_filter != "All Types":
+                texture_tag = self._get_texture_color_tag(texture)
+                expected_tag = self._color_name_to_tag(color_filter)
+                if texture_tag != expected_tag:
+                    continue
+            
+            # If we get here, the texture passed all filters
+            self.filtered_textures.append(texture)
         
         self._update_textures_display()
         self.status_label.configure(text=f"Showing {len(self.filtered_textures)} of {len(self.textures)} textures")
@@ -1053,19 +1153,24 @@ class TexturesFrame(ctk.CTkFrame):
             if os.path.exists(base_path):
                 base_found = True
                 texture_type = "High Resolution Base" if is_hires else "Base Texture"
+                # Convert path to be relative to main BMS folder
+                folder_name = "KoreaObj_HiRes" if is_hires else "KoreaObj"
+                display_path = self.master.master.data_manager.get_path_relative_to_bms_main(folder_name)
                 self.pbr_tree.insert("", "end", values=(
                     texture_id,
                     texture_type,
-                    "KoreaObj_HiRes" if is_hires else "KoreaObj"
+                    display_path
                 ))
                 break
         
         if not base_found:
             # Add base texture entry even if not found
+            # Convert path to be relative to main BMS folder
+            display_path = self.master.master.data_manager.get_path_relative_to_bms_main("KoreaObj")
             self.pbr_tree.insert("", "end", values=(
                 texture_id,
                 "Base Texture",
-                "KoreaObj"
+                display_path
             ))
         
         # Process PBR variants
@@ -1086,10 +1191,13 @@ class TexturesFrame(ctk.CTkFrame):
                 if os.path.exists(variant_path) and variant_name not in found_variants:
                     found_variants.add(variant_name)
                     texture_type = f"High Resolution {variant_type}" if is_hires else variant_type
+                    # Convert path to be relative to main BMS folder
+                    folder_name = "KoreaObj_HiRes" if is_hires else "KoreaObj"
+                    display_path = self.master.master.data_manager.get_path_relative_to_bms_main(folder_name)
                     self.pbr_tree.insert("", "end", values=(
                         variant_name,
                         texture_type,
-                        "KoreaObj_HiRes" if is_hires else "KoreaObj"
+                        display_path
                     ))
 
     def show_legend(self):
@@ -1150,6 +1258,7 @@ class UnusedTexturesFrame(ctk.CTkFrame):
         # Configure grid
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)  # Main content expands
+        self.grid_rowconfigure(2, weight=0)  # Button frame doesn't expand
         
         # Header frame with new color
         self.header_frame = ctk.CTkFrame(self)
@@ -1263,8 +1372,47 @@ class UnusedTexturesFrame(ctk.CTkFrame):
         vsb.grid(row=0, column=1, sticky="ns")
         hsb.grid(row=1, column=0, sticky="ew")
         
+        # Bind selection event for texture removal
+        self.tree.bind("<<TreeviewSelect>>", self._on_texture_select)
+        
         # Store references
         self.textures = []
+        self.current_sort = None
+        self.sort_ascending = True
+        
+        # Button frame for deletion controls - positioned at bottom
+        self.button_frame = ctk.CTkFrame(self)
+        self.button_frame.grid(row=2, column=0, padx=20, pady=(0, 20), sticky="ew")
+        self.button_frame.grid_columnconfigure(0, weight=1)
+        self.button_frame.grid_columnconfigure(1, weight=1)
+        self.button_frame.configure(fg_color="#B8CFE5")  # Same shade as table frame
+        
+        # Remove Single Unused Texture button (red) - initially disabled
+        self.remove_single_button = ctk.CTkButton(
+            self.button_frame,
+            text="Remove Single Unused Texture",
+            command=self.remove_single_texture,
+            fg_color="#B71C1C",  # Red color
+            hover_color="#8E0000",  # Darker red for hover
+            text_color="#FFFFFF",
+            font=ctk.CTkFont(size=self.base_font_size, weight="bold"),
+            height=int(40 * dpi),
+            state="disabled"  # Initially disabled until a texture is selected
+        )
+        self.remove_single_button.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        
+        # Remove All Unused Textures button (red)
+        self.remove_all_button = ctk.CTkButton(
+            self.button_frame,
+            text="Remove All Unused Textures",
+            command=self.remove_all_textures,
+            fg_color="#B71C1C",  # Red color
+            hover_color="#8E0000",  # Darker red for hover
+            text_color="#FFFFFF",
+            font=ctk.CTkFont(size=self.base_font_size, weight="bold"),
+            height=int(40 * dpi)
+        )
+        self.remove_all_button.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
     
     def update_list(self, textures: List[int]) -> None:
         """Update the unused textures list with new data."""
@@ -1339,10 +1487,179 @@ class UnusedTexturesFrame(ctk.CTkFrame):
             text=f"{column.replace('_', ' ').title()}{' ▼' if self.sort_ascending else ' ▲'}"
         )
     
+    def remove_single_texture(self):
+        """Remove a single selected unused texture."""
+        # Get selected texture
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select a texture to remove.")
+            return
+        
+        # Get texture ID from selection
+        item = self.tree.item(selection[0])
+        texture_id = item['values'][0]
+        
+        # Confirmation dialog
+        result = messagebox.askyesno(
+            "Confirm Deletion",
+            f"Are you sure you want to delete texture {texture_id} and all its associated files?\n\n"
+            "This action cannot be undone and will permanently remove:\n"
+            "• Base texture file (.dds)\n"
+            "• ARMW texture file (if exists)\n"
+            "• Normal texture file (if exists)\n"
+            "• High-resolution versions (if exist)\n\n"
+            "Continue with deletion?",
+            icon="warning"
+        )
+        
+        if result:
+            deleted_files = self._delete_texture_files(texture_id)
+            if deleted_files:
+                # Format as dictionary for logging
+                deleted_files_dict = {texture_id: deleted_files}
+                self._log_deleted_files([int(texture_id)], deleted_files_dict)
+                # Remove from list and refresh display
+                if int(texture_id) in self.textures:
+                    self.textures.remove(int(texture_id))
+                self.update_list(self.textures)
+                messagebox.showinfo("Success", f"Texture {texture_id} has been deleted successfully.")
+            else:
+                messagebox.showwarning("No Files Found", f"No files were found for texture {texture_id}.")
+
+    def remove_all_textures(self):
+        """Remove all unused textures."""
+        if not self.textures:
+            messagebox.showwarning("No Textures", "No unused textures to remove.")
+            return
+        
+        # Confirmation dialog
+        result = messagebox.askyesno(
+            "Confirm Mass Deletion",
+            f"Are you sure you want to delete ALL {len(self.textures)} unused textures?\n\n"
+            "This action cannot be undone and will permanently remove all texture files including:\n"
+            "• Base texture files (.dds)\n"
+            "• ARMW texture files (if exist)\n"
+            "• Normal texture files (if exist)\n"
+            "• High-resolution versions (if exist)\n\n"
+            "This is a destructive operation that cannot be reversed.\n"
+            "Continue with mass deletion?",
+            icon="warning"
+        )
+        
+        if result:
+            all_deleted_files = {}
+            deleted_texture_ids = []
+            
+            for texture_id in self.textures[:]:  # Use slice to avoid modification during iteration
+                deleted_files = self._delete_texture_files(str(texture_id))
+                if deleted_files:
+                    all_deleted_files[str(texture_id)] = deleted_files
+                    deleted_texture_ids.append(texture_id)
+            
+            if all_deleted_files:
+                self._log_deleted_files(deleted_texture_ids, all_deleted_files)
+                # Clear the list and refresh display
+                self.textures.clear()
+                self.update_list([])
+                messagebox.showinfo("Success", f"Successfully deleted {len(deleted_texture_ids)} textures and their associated files.")
+            else:
+                messagebox.showwarning("No Files Found", "No texture files were found to delete.")
+
+    def _delete_texture_files(self, texture_id: str) -> List[str]:
+        """Delete all files associated with a texture ID and return list of deleted files."""
+        deleted_files = []
+        
+        # Get data manager for paths
+        data_manager = self.master.master.data_manager
+        
+        if not data_manager.korea_obj_path or not data_manager.korea_obj_hires_path:
+            logger.error("Texture paths not set in data manager")
+            return deleted_files
+        
+        # Define all possible file patterns to check
+        file_patterns = [
+            # Standard KoreaObj files
+            (os.path.join(data_manager.korea_obj_path, f"{texture_id}.dds"), "Base texture"),
+            (os.path.join(data_manager.korea_obj_path, f"{texture_id}_armw.dds"), "ARMW texture"),
+            (os.path.join(data_manager.korea_obj_path, f"{texture_id}_normal.dds"), "Normal texture"),
+            # High-resolution KoreaObj_HiRes files
+            (os.path.join(data_manager.korea_obj_hires_path, f"{texture_id}.dds"), "High-res base texture"),
+            (os.path.join(data_manager.korea_obj_hires_path, f"{texture_id}_armw.dds"), "High-res ARMW texture"),
+            (os.path.join(data_manager.korea_obj_hires_path, f"{texture_id}_normal.dds"), "High-res Normal texture"),
+        ]
+        
+        # Try to delete each file
+        for file_path, file_type in file_patterns:
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    deleted_files.append(f"{file_type}: {file_path}")
+                    logger.info(f"Deleted {file_type} file: {file_path}")
+                except OSError as e:
+                    logger.error(f"Failed to delete {file_type} file {file_path}: {str(e)}")
+                    # Continue with other files even if one fails
+        
+        return deleted_files
+
+    def _log_deleted_files(self, texture_ids: List[int], deleted_files_dict: dict):
+        """Create a detailed log of deleted texture files."""
+        # Create logs directory if it doesn't exist
+        os.makedirs("logs", exist_ok=True)
+        
+        # Generate log filename with timestamp
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_filename = f"logs/deleted_textures_{timestamp}.log"
+        
+        try:
+            with open(log_filename, 'w', encoding='utf-8') as log_file:
+                log_file.write("=" * 80 + "\n")
+                log_file.write("DELETED UNUSED TEXTURES LOG\n")
+                log_file.write("=" * 80 + "\n")
+                log_file.write(f"Date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                log_file.write(f"Total textures processed: {len(texture_ids)}\n")
+                log_file.write(f"Total files deleted: {sum(len(files) for files in deleted_files_dict.values())}\n")
+                log_file.write("\n")
+                
+                # Log each texture and its deleted files
+                for texture_id in texture_ids:
+                    texture_id_str = str(texture_id)
+                    if texture_id_str in deleted_files_dict:
+                        files = deleted_files_dict[texture_id_str]
+                        log_file.write(f"TEXTURE ID: {texture_id}\n")
+                        log_file.write("-" * 40 + "\n")
+                        
+                        if files:
+                            for file_info in files:
+                                log_file.write(f"  ✓ {file_info}\n")
+                        else:
+                            log_file.write("  ⚠ No files found for this texture\n")
+                        
+                        log_file.write("\n")
+                
+                log_file.write("=" * 80 + "\n")
+                log_file.write("END OF LOG\n")
+                log_file.write("=" * 80 + "\n")
+            
+            logger.info(f"Deletion log created: {log_filename}")
+            
+        except Exception as e:
+            logger.error(f"Failed to create deletion log: {str(e)}")
+            # Show error to user but don't fail the deletion process
+            messagebox.showwarning("Log Error", f"Failed to create deletion log: {str(e)}")
+
     def _delete_all_textures(self) -> None:
-        # Here you would implement the actual deletion logic
-        self.textures.clear()
-        self.update_list([])
+        """Legacy method - redirects to remove_all_textures for compatibility."""
+        self.remove_all_textures()
+
+    def _on_texture_select(self, event):
+        """Handle texture selection event."""
+        selection = self.tree.selection()
+        if selection:
+            # Enable single texture removal button when a texture is selected
+            self.remove_single_button.configure(state="normal")
+        else:
+            # Disable single texture removal button when no texture is selected
+            self.remove_single_button.configure(state="disabled")
 
     def show_legend(self):
         legend_items = [
@@ -1386,10 +1703,11 @@ class ParentsFrame(ctk.CTkFrame):
         # Search frame with new color
         self.search_frame = ctk.CTkFrame(self)
         self.search_frame.grid(row=0, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
-        self.search_frame.grid_columnconfigure(2, weight=1)  # Make search entry expandable
+        self.search_frame.grid_columnconfigure(3, weight=1)  # Make search entry expandable
         self.search_frame.grid_columnconfigure(0, weight=0)  # Legend button fixed
-        self.search_frame.grid_columnconfigure(1, weight=0)  # Type filter fixed
-        self.search_frame.grid_columnconfigure(3, weight=0)  # Search button fixed
+        self.search_frame.grid_columnconfigure(1, weight=0)  # Color filter fixed
+        self.search_frame.grid_columnconfigure(2, weight=0)  # Type filter fixed
+        self.search_frame.grid_columnconfigure(4, weight=0)  # Search button fixed
         self.search_frame.configure(fg_color="#D4E5F2")  # Lighter shade for search frame
         
         # Add legend button with new colors
@@ -1403,6 +1721,24 @@ class ParentsFrame(ctk.CTkFrame):
             text_color="#FFFFFF"
         )
         self.legend_button.grid(row=0, column=0, padx=5, pady=5)
+        
+        # Add color filter with new colors
+        self.color_var = ctk.StringVar(value="All Colors")
+        self.color_menu = ctk.CTkOptionMenu(
+            self.search_frame,
+            variable=self.color_var,
+            values=["All Colors", "PBR", "Semi-PBR", "Outsourced", "No Texture"],
+            command=self.filter_parents,
+            font=ctk.CTkFont(size=self.base_font_size),
+            fg_color="#7A92A9",
+            button_color="#6E8499",
+            button_hover_color="#5D7388",
+            text_color="#FFFFFF",
+            dropdown_fg_color="#7A92A9",
+            dropdown_hover_color="#6E8499",
+            dropdown_text_color="#FFFFFF"
+        )
+        self.color_menu.grid(row=0, column=1, padx=5, pady=5)
         
         # Add type filter with new colors
         self.type_var = ctk.StringVar(value="All")
@@ -1420,7 +1756,7 @@ class ParentsFrame(ctk.CTkFrame):
             dropdown_hover_color="#6E8499",
             dropdown_text_color="#FFFFFF"
         )
-        self.type_menu.grid(row=0, column=1, padx=5, pady=5)
+        self.type_menu.grid(row=0, column=2, padx=5, pady=5)
         
         # Search entry with new colors
         self.search_entry = ctk.CTkEntry(
@@ -1431,7 +1767,7 @@ class ParentsFrame(ctk.CTkFrame):
             border_color="#7A92A9",
             text_color="#2D3B45"
         )
-        self.search_entry.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
+        self.search_entry.grid(row=0, column=3, padx=5, pady=5, sticky="ew")
         self.search_entry.bind("<Return>", self.search_parents)
         
         # Search button with new colors
@@ -1444,7 +1780,7 @@ class ParentsFrame(ctk.CTkFrame):
             hover_color="#6E8499",
             text_color="#FFFFFF"
         )
-        self.search_button.grid(row=0, column=3, padx=5, pady=5)
+        self.search_button.grid(row=0, column=4, padx=5, pady=5)
         
         # Status label with new colors
         self.status_label = ctk.CTkLabel(
@@ -1453,7 +1789,7 @@ class ParentsFrame(ctk.CTkFrame):
             font=ctk.CTkFont(size=self.base_font_size),
             text_color="#2D3B45"
         )
-        self.status_label.grid(row=1, column=0, columnspan=2, padx=5, pady=(0, 5), sticky="ew")
+        self.status_label.grid(row=1, column=0, columnspan=5, padx=5, pady=(0, 5), sticky="ew")
         
         # Left side - Parents list frame with new color
         self.parents_frame = ctk.CTkFrame(self)
@@ -1499,6 +1835,7 @@ class ParentsFrame(ctk.CTkFrame):
         self.parents_tree.tag_configure("bml2", background="#2E7D32", foreground="white")  # Dark green
         self.parents_tree.tag_configure("bml1_pbr", background="#81C784")  # Light green
         self.parents_tree.tag_configure("bml_1", background="#1565C0", foreground="white")  # Dark blue
+        self.parents_tree.tag_configure("missing", background="#B71C1C", foreground="white")  # Red for missing/no texture
         
         # Configure column with stretching
         self.parents_tree.heading("parent", text="Parents List", command=lambda: self.sort_parents("parent"))
@@ -1612,6 +1949,37 @@ class ParentsFrame(ctk.CTkFrame):
         self.current_sort = None
         self.sort_ascending = True
     
+    def _get_parent_color_tag(self, parent_data):
+        """Get the color tag for a parent based on its properties."""
+        if not parent_data:
+            return "missing"  # No parent data means missing/no texture
+        
+        # Check if ParentDetailsReport file is loaded
+        pdr_loaded = bool(self.master.master.data_manager.pdr_file)
+        
+        if parent_data.bml_version == 2:
+            return "bml2"  # PBR (Dark Green)
+        elif parent_data.bml_version == 1 and pdr_loaded and any(texture_id in self.master.master.data_manager.textures and self.master.master.data_manager.textures[texture_id].pbr for texture_id in parent_data.textures if parent_data.textures):
+            return "bml1_pbr"  # Semi-PBR (Light Green)
+        elif parent_data.bml_version == 1 and not pdr_loaded:
+            return ""  # Default case when PDR not loaded - don't assume missing textures
+        elif parent_data.bml_version == -1:
+            return "bml_1"  # Outsourced (Blue)
+        elif pdr_loaded and (not parent_data.textures or len(parent_data.textures) == 0):
+            return "missing"  # No Texture (Red) - only when PDR is loaded
+        else:
+            return ""  # Default case
+    
+    def _color_name_to_tag(self, color_name):
+        """Map color filter names to tag names."""
+        color_map = {
+            "PBR": "bml2",
+            "Semi-PBR": "bml1_pbr",
+            "Outsourced": "bml_1",
+            "No Texture": "missing"
+        }
+        return color_map.get(color_name, "")
+    
     def update_list(self, parents: List[int]):
         """Update the parents list with new data."""
         self.parents = sorted(parents)
@@ -1631,23 +1999,17 @@ class ParentsFrame(ctk.CTkFrame):
                 
             # Get parent data
             parent_data = self.master.master.data_manager.parents.get(parent)
-            if parent_data:
-                # Determine tag based on BML version and PBR state
-                tag = ""
-                if parent_data.bml_version == 2:
-                    tag = "bml2"
-                elif parent_data.bml_version == 1 and any(texture_id in self.master.master.data_manager.textures and self.master.master.data_manager.textures[texture_id].pbr for texture_id in parent_data.textures):
-                    tag = "bml1_pbr"
-                elif parent_data.bml_version == -1:
-                    tag = "bml_1"
-                
-                self.parents_tree.insert("", "end", values=(str(parent),), tags=(tag,))
-            else:
-                self.parents_tree.insert("", "end", values=(str(parent),))
+            
+            # Get color tag for this parent
+            tag = self._get_parent_color_tag(parent_data)
+            
+            # Insert item with appropriate tag
+            self.parents_tree.insert("", "end", values=(str(parent),), tags=(tag,) if tag else ())
     
     def filter_parents(self, *args):
-        """Filter parents based on type and search text."""
+        """Filter parents based on type, color, and search text."""
         type_filter = self.type_var.get()
+        color_filter = self.color_var.get()
         search_text = self.search_entry.get().lower()
         
         # Clear filtered parents list
@@ -1662,24 +2024,30 @@ class ParentsFrame(ctk.CTkFrame):
             
             # Get parent data
             parent_data = self.master.master.data_manager.parents.get(parent)
-            if not parent_data:
-                continue
             
             # Check type filter
             passes_type = False
             if type_filter == "All":
                 passes_type = True
             elif type_filter == "Cockpit":
-                passes_type = parent_data.type == "Cockpit"
+                passes_type = parent_data and parent_data.type == "Cockpit"
             else:
-                passes_type = parent_data.type == type_filter and parent_data.type != "Cockpit"
+                passes_type = parent_data and parent_data.type == type_filter and parent_data.type != "Cockpit"
             
             if not passes_type:
                 continue
             
+            # Check color filter
+            if color_filter != "All Colors":
+                parent_tag = self._get_parent_color_tag(parent_data)
+                expected_tag = self._color_name_to_tag(color_filter)
+                if parent_tag != expected_tag:
+                    continue
+            
             # Check search filter
             if search_text:
-                if str(parent).lower().find(search_text) == -1 and parent_data.model_name.lower().find(search_text) == -1:
+                parent_name = parent_data.model_name if parent_data else ""
+                if str(parent).lower().find(search_text) == -1 and parent_name.lower().find(search_text) == -1:
                     continue
             
             # If we get here, the parent passed all filters
@@ -1753,9 +2121,49 @@ class ParentsFrame(ctk.CTkFrame):
         for item in self.texture_tree.get_children():
             self.texture_tree.delete(item)
         
-        # Get parent data from data manager
+        # Get all models that use this parent number
+        models_using_parent = self.master.master.data_manager.get_models_using_parent(int(parent_number))
+        
+        # Get parent data from data manager for texture information
         parent_data = self.master.master.data_manager.parents.get(int(parent_number))
-        if parent_data:
+        
+        # Display all models that use this parent
+        if models_using_parent:
+            for model in models_using_parent:
+                # Get BML versions for this model
+                bml_versions = self.master.master.data_manager.get_model_bml_versions(model)
+                
+                # Determine which model states use this parent
+                model_states = []
+                parent_str = str(parent_number)
+                if model.normal_model == parent_str:
+                    model_states.append("Normal")
+                if model.fixed_model == parent_str:
+                    model_states.append("Repaired")
+                if model.damaged_model == parent_str:
+                    model_states.append("Damaged")
+                if model.destroyed_model == parent_str:
+                    model_states.append("Destroyed")
+                if model.left_destroyed_model == parent_str:
+                    model_states.append("Left Destroyed")
+                if model.right_destroyed_model == parent_str:
+                    model_states.append("Right Destroyed")
+                if model.both_models_destroyed == parent_str:
+                    model_states.append("Both Destroyed")
+                
+                # Join model states for display
+                model_type_display = ", ".join(model_states) if model_states else "Unknown"
+                
+                self.info_tree.insert("", "end", values=(
+                    bml_versions,
+                    model.name,
+                    model_type_display,
+                    model.type,
+                    str(model.ct_number),
+                    str(model.type_number)  # This is the Entity Index
+                ))
+        elif parent_data:
+            # If no models found but parent data exists (e.g., cockpit parents)
             # If this is a cockpit parent with multiple aircraft variants
             if hasattr(parent_data, 'aircraft_variants') and parent_data.aircraft_variants:
                 # Add an entry for each aircraft variant
@@ -1778,7 +2186,9 @@ class ParentsFrame(ctk.CTkFrame):
                     str(parent_data.ct_number),
                     str(parent_data.entity_idx)
                 ))
-            
+        
+        # Add texture information based on parent data if available
+        if parent_data:
             # Add texture information based on BML version only
             if parent_data.bml_version == 2:
                 # Get BML2 textures from materials.mtl
@@ -1788,10 +2198,13 @@ class ParentsFrame(ctk.CTkFrame):
                     full_path = os.path.join(self.master.master.data_manager.base_folder, tex["path"], tex["name"])
                     exists = os.path.exists(full_path)
                     
+                    # Convert path to be relative to main BMS folder
+                    display_path = self.master.master.data_manager.get_path_relative_to_bms_main(tex["path"])
+                    
                     self.texture_tree.insert("", "end", values=(
                         tex["name"],
                         tex["type"],
-                        tex["path"]  # Only show the path
+                        display_path  # Show path relative to main BMS folder
                     ))  # Removed tags
             elif parent_data.bml_version == 1:
                 # Add regular texture information
@@ -1799,11 +2212,14 @@ class ParentsFrame(ctk.CTkFrame):
                     for texture_id in parent_data.textures:
                         texture_data = self.master.master.data_manager.textures.get(texture_id)
                         if texture_data:
+                            # Convert KoreaObj path to be relative to main BMS folder
+                            display_path = self.master.master.data_manager.get_path_relative_to_bms_main("KoreaObj")
+                            
                             # Add base texture
                             self.texture_tree.insert("", "end", values=(
                                 texture_id,
                                 "Texture",
-                                "KoreaObj"  # Only show the path
+                                display_path  # Show path relative to main BMS folder
                             ))
                             
                             # Add PBR textures if available
@@ -1812,7 +2228,7 @@ class ParentsFrame(ctk.CTkFrame):
                                     self.texture_tree.insert("", "end", values=(
                                         pbr_name,
                                         pbr_type.upper(),
-                                        "KoreaObj"  # Only show the path
+                                        display_path  # Show path relative to main BMS folder
                                     ))
 
     def show_legend(self):
@@ -1823,11 +2239,15 @@ class ParentsFrame(ctk.CTkFrame):
         # Disable button and change color
         self.legend_button.configure(state="disabled", fg_color="gray")
         
+        # Check if PDR is loaded to customize legend
+        pdr_loaded = bool(self.master.master.data_manager.pdr_file)
+        missing_texture_text = "Missing Texture (when PDR loaded)" if not pdr_loaded else "Missing Texture"
+        
         legend_items = [
             ("#2E7D32", "BML Version 2"),
             ("#81C784", "BML Version 1 with PBR"),
             ("#1565C0", "BML Version -1"),
-            ("#B71C1C", "Missing Texture")
+            ("#B71C1C", missing_texture_text)
         ]
         
         # Create legend window with callback
@@ -1841,87 +2261,151 @@ class ProcessingWindow(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
         
+        # Initialize animation state
+        self._is_running = True
+        self._animation_step = 0
+        
         # Configure window
-        self.title("Processing")
-        window_width = 300
-        window_height = 150
+        self.title("Processing Data")
+        window_width = 400
+        window_height = 200
         self.geometry(f"{window_width}x{window_height}")
         self.resizable(False, False)
         
-        # Make window background match parent's background
-        self.configure(fg_color=parent.cget("fg_color"))
+        # Set modern background color matching the app theme
+        self.configure(fg_color="#E3F4FF")
         
         # Center window on parent
+        self.update_idletasks()  # Ensure parent geometry is updated
         x = parent.winfo_x() + (parent.winfo_width() // 2) - (window_width // 2)
         y = parent.winfo_y() + (parent.winfo_height() // 2) - (window_height // 2)
         self.geometry(f"+{x}+{y}")
         
-        # Remove window decorations
+        # Make window modal and topmost
         self.transient(parent)
         self.grab_set()
+        self.lift()
+        self.attributes('-topmost', True)
         
-        # Configure grid
+        # Configure grid layout
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
         
-        # Add label
-        self.label = ctk.CTkLabel(
+        # Create main content frame with modern styling
+        self.content_frame = ctk.CTkFrame(
             self,
-            text="Processing Files...",
-            font=ctk.CTkFont(size=16, weight="bold")
+            fg_color="#D4E5F2",
+            corner_radius=15,
+            border_width=1,
+            border_color="#7A92A9"
         )
-        self.label.grid(row=0, column=0, padx=20, pady=(20, 10))
+        self.content_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        self.content_frame.grid_columnconfigure(0, weight=1)
         
-        # Create frame for image with matching background
-        self.image_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.image_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 20))
-        self.image_frame.grid_columnconfigure(0, weight=1)
-        self.image_frame.grid_rowconfigure(0, weight=1)
+        # Title label with modern styling
+        self.title_label = ctk.CTkLabel(
+            self.content_frame,
+            text="Processing Files",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color="#2D3B45"
+        )
+        self.title_label.grid(row=0, column=0, padx=30, pady=(25, 10))
         
+        # Status label for dynamic updates
+        self.status_label = ctk.CTkLabel(
+            self.content_frame,
+            text="Loading and analyzing data...",
+            font=ctk.CTkFont(size=12),
+            text_color="#5A6B77"
+        )
+        self.status_label.grid(row=1, column=0, padx=30, pady=(0, 15))
+        
+        # Modern animated progress bar
+        self.progress_bar = ctk.CTkProgressBar(
+            self.content_frame,
+            width=300,
+            height=8,
+            corner_radius=4,
+            fg_color="#B8CFE5",
+            progress_color="#7A92A9",
+            border_width=0
+        )
+        self.progress_bar.grid(row=2, column=0, padx=30, pady=(0, 15), sticky="ew")
+        
+        # Set initial progress value
+        self.progress_bar.set(0)
+        
+        # Create animated dots for additional visual feedback
+        self.dots_label = ctk.CTkLabel(
+            self.content_frame,
+            text="•",
+            font=ctk.CTkFont(size=20),
+            text_color="#7A92A9"
+        )
+        self.dots_label.grid(row=3, column=0, padx=30, pady=(0, 25))
+        
+        # Start animations
+        self._animate_progress()
+        self._animate_dots()
+        
+        # Ensure window stays on top during processing
+        self.after(100, self._maintain_focus)
+    
+    def _animate_progress(self):
+        """Animate the progress bar with a smooth wave effect"""
+        if not self._is_running:
+            return
+            
+        # Create a smooth sine wave animation
+        import math
+        progress_value = (math.sin(self._animation_step * 0.1) + 1) / 2
+        self.progress_bar.set(progress_value)
+        
+        self._animation_step += 1
+        
+        # Schedule next animation frame (60 FPS for smooth animation)
+        self.after(16, self._animate_progress)
+    
+    def _animate_dots(self):
+        """Animate the loading dots"""
+        if not self._is_running:
+            return
+            
+        dot_patterns = ["•", "••", "•••", "••", "•"]
+        pattern_index = (self._animation_step // 30) % len(dot_patterns)
+        self.dots_label.configure(text=dot_patterns[pattern_index])
+        
+        # Schedule next dot animation (slower than progress bar)
+        self.after(100, self._animate_dots)
+    
+    def _maintain_focus(self):
+        """Ensure window stays focused and topmost during processing"""
+        if not self._is_running:
+            return
+            
         try:
-            # Load and resize the processing.png from assets folder
-            animation_path = os.path.join("assets", "processing.png")
-            image = Image.open(animation_path)
-            
-            # Ensure RGBA mode for transparency
-            if image.mode != 'RGBA':
-                image = image.convert('RGBA')
-            
-            
-            # Calculate size to fit window while maintaining aspect ratio
-            image_width = window_width - 60
-            image_height = window_height - 100
-            
-            width_ratio = image_width / image.width
-            height_ratio = image_height / image.height
-            scale_factor = min(width_ratio, height_ratio)
-            
-            new_width = int(image.width * scale_factor)
-            new_height = int(image.height * scale_factor)
-            
-            # Create CTkImage for proper HighDPI scaling
-            ctk_image = ctk.CTkImage(
-                light_image=image,
-                dark_image=image,
-                size=(new_width, new_height)
-            )
-            
-            # Create and configure label for image with transparent background
-            self.image_label = ctk.CTkLabel(
-                self.image_frame,
-                text="",
-                image=ctk_image,
-                fg_color="transparent"
-            )
-            self.image_label.grid(row=0, column=0, sticky="nsew")
-            
-        except Exception as e:
-            # If image loading fails, show text instead
-            self.label.configure(text="Processing Files...\nPlease wait")
+            self.lift()
+            self.focus_force()
+            # Schedule next focus check
+            self.after(500, self._maintain_focus)
+        except:
+            # Window might be destroyed, ignore errors
+            pass
+    
+    def update_status(self, status_text):
+        """Thread-safe method to update status text"""
+        if self._is_running:
+            self.after(0, lambda: self.status_label.configure(text=status_text))
     
     def close(self):
-        self.grab_release()
-        self.destroy()
+        """Close the processing window and stop all animations"""
+        self._is_running = False
+        try:
+            self.grab_release()
+            self.destroy()
+        except:
+            # Window might already be destroyed, ignore errors
+            pass
 
 class LegendWindow(ctk.CTkToplevel):
     def __init__(self, parent, title, legend_items, on_close=None):
@@ -2004,8 +2488,28 @@ class PBRTexturesFrame(ctk.CTkFrame):
         # Search frame with new color
         search_frame = ctk.CTkFrame(self)
         search_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=20, pady=(10, 0))
-        search_frame.grid_columnconfigure(0, weight=1)  # Make search entry expandable
+        search_frame.grid_columnconfigure(1, weight=1)  # Make search entry expandable
+        search_frame.grid_columnconfigure(0, weight=0)  # Color filter fixed
+        search_frame.grid_columnconfigure(2, weight=0)  # Search button fixed
         search_frame.configure(fg_color="#D4E5F2")  # Lighter shade for search frame
+        
+        # Color filter with new colors
+        self.color_var = ctk.StringVar(value="All Types")
+        self.color_menu = ctk.CTkOptionMenu(
+            search_frame,
+            variable=self.color_var,
+            values=["All Types", "Multiple-Paths", "Missing Texture"],
+            command=self.search_textures,
+            font=ctk.CTkFont(size=self.base_font_size),
+            fg_color="#7A92A9",
+            button_color="#6E8499",
+            button_hover_color="#5D7388",
+            text_color="#FFFFFF",
+            dropdown_fg_color="#7A92A9",
+            dropdown_hover_color="#6E8499",
+            dropdown_text_color="#FFFFFF"
+        )
+        self.color_menu.grid(row=0, column=0, padx=5, pady=5)
         
         # Add search entry with scaled font and new colors
         self.search_entry = ctk.CTkEntry(
@@ -2016,7 +2520,7 @@ class PBRTexturesFrame(ctk.CTkFrame):
             border_color="#7A92A9",
             text_color="#2D3B45"
         )
-        self.search_entry.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+        self.search_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         self.search_entry.bind("<Return>", self.search_textures)
         
         # Add search button with scaled font and new colors
@@ -2029,7 +2533,7 @@ class PBRTexturesFrame(ctk.CTkFrame):
             hover_color="#6E8499",
             text_color="#FFFFFF"
         )
-        self.search_button.grid(row=0, column=1, padx=5, pady=5)
+        self.search_button.grid(row=0, column=2, padx=5, pady=5)
         
         # Create header frame with legend and status
         header_frame = ctk.CTkFrame(self)
@@ -2044,7 +2548,7 @@ class PBRTexturesFrame(ctk.CTkFrame):
         # Add legend items
         legend_items = [
             ("Missing Texture", "#B71C1C"),
-            ("Multiple Paths", "#FFA500")  # Changed text from "Partially Missing" to "Multiple Paths"
+            ("Multiple Paths", "#FDD835")  # Yellow for multiple paths
         ]
         
         for i, (text, color) in enumerate(legend_items):
@@ -2187,10 +2691,37 @@ class PBRTexturesFrame(ctk.CTkFrame):
         
         # Store all textures for search
         self.all_textures = {}
+    
+    def _get_texture_color_tag(self, texture_name, texture_data):
+        """Get the color tag for a texture based on its properties."""
+        # Count how many paths exist and don't exist
+        paths_exist = sum(exists for exists in texture_data['paths'].values())
+        total_paths = len(texture_data['paths'])
+        
+        # Count unique base paths
+        unique_base_paths = len(texture_data['base_paths'])
+        
+        # Determine tag based on existence in paths
+        if paths_exist == 0:
+            return "missing"  # Red for missing textures
+        elif paths_exist < total_paths:
+            return "missing"  # Red for partially missing textures
+        elif unique_base_paths > 1:
+            return "partial"  # Yellow for multiple paths
+        else:
+            return ""  # Default case (no special properties)
+    
+    def _color_name_to_tag(self, color_name):
+        """Map color filter names to tag names."""
+        color_map = {
+            "Multiple-Paths": "partial",
+            "Missing Texture": "missing"
+        }
+        return color_map.get(color_name, "")
         
         # Configure tags for different states
         self.texture_list.tag_configure("missing", background="#B71C1C", foreground="white")  # Red background, white text
-        self.texture_list.tag_configure("partial", background="#FFA500", foreground="black")  # Orange background, black text
+        self.texture_list.tag_configure("partial", background="#FDD835", foreground="black")  # Yellow background, black text for multiple paths
         self.info_tree.tag_configure("multiple_paths", background="#FDD835")  # Yellow background for multiple paths
         
         logger.info("PBRTexturesFrame initialization complete")
@@ -2258,27 +2789,13 @@ class PBRTexturesFrame(ctk.CTkFrame):
             # Add textures to list (batch operation)
             items_to_add = []
             for texture_name, data in sorted(self.all_textures.items()):
-                # Count how many paths exist and don't exist
-                paths_exist = sum(exists for exists in data['paths'].values())
-                total_paths = len(data['paths'])
-                
-                # Count unique base paths
-                unique_base_paths = len(data['base_paths'])
-                
-                # Determine tag based on existence in paths
-                tag = ""
-                if paths_exist == 0:
-                    tag = "missing"
-                elif paths_exist < total_paths:
-                    tag = "missing"
-                elif unique_base_paths > 1:
-                    tag = "partial"
-                
+                # Get color tag for this texture
+                tag = self._get_texture_color_tag(texture_name, data)
                 items_to_add.append((texture_name, tag))
             
             # Batch insert items
             for texture_name, tag in items_to_add:
-                self.texture_list.insert("", "end", values=(texture_name,), tags=(tag,))
+                self.texture_list.insert("", "end", values=(texture_name,), tags=(tag,) if tag else ())
             
             # Update status
             total_textures = len(self.all_textures)
@@ -2319,16 +2836,21 @@ class PBRTexturesFrame(ctk.CTkFrame):
             # Add paths to info table
             for path, exists in sorted(texture_data['paths'].items()):
                 # Skip variant paths for display
-                if "/" in path and path.split("/")[-1] in ["Normal", "ARMW"]:
+                # Normalize path separators before checking
+                normalized_display_path = path.replace('\\\\', '/').replace('\\', '/').replace('//', '/')
+                if "/" in normalized_display_path and normalized_display_path.split("/")[-1] in ["Normal", "ARMW"]:
                     continue
                     
                 # Get the texture type
                 texture_type = texture_data['type']
                 
-                logger.debug(f"Adding path info - Type: {texture_type}, Path: {path}, Exists: {exists}")
+                # Convert path to be relative to main BMS folder
+                display_path = self.data_manager.get_path_relative_to_bms_main(path)
+                
+                logger.debug(f"Adding path info - Type: {texture_type}, Path: {display_path}, Exists: {exists}")
                 self.info_tree.insert("", "end", values=(
                     texture_type,
-                    path
+                    display_path
                 ))  # Removed tags
             
             # Update parents table
@@ -2386,53 +2908,51 @@ class PBRTexturesFrame(ctk.CTkFrame):
         if texture_path.lower().endswith('.dds'):
             texture_path = texture_path[:-4]
             
+        # Normalize path separators (handle /, //, \, \\)
+        normalized_path = texture_path.replace('\\\\', '/').replace('\\', '/').replace('//', '/')
+            
         # If path starts with a parent number or _MiscTex, use that
-        if '/' in texture_path:
-            prefix = texture_path.split('/')[0]
+        if '/' in normalized_path:
+            prefix = normalized_path.split('/')[0]
             if prefix.isdigit() or prefix == '_MiscTex':
-                return f"Models/{texture_path}"
+                return f"Models/{normalized_path}"
         
         # Otherwise, use the parent's model folder
         return f"Models/{parent_number}"
 
     def search_textures(self, *args):
-        """Search textures by name."""
+        """Search and filter textures by name and color type."""
         search_text = self.search_entry.get().lower().strip()
+        color_filter = self.color_var.get()
         
         # Clear existing items
         for item in self.texture_list.get_children():
             self.texture_list.delete(item)
         
-        # If search is empty, show all textures
-        if not search_text:
-            matching_textures = self.all_textures
-        else:
-            # Filter textures based on search text
-            matching_textures = {
-                name: data for name, data in self.all_textures.items()
-                if search_text in name.lower()
-            }
+        # Filter textures
+        matching_textures = {}
+        for texture_name, data in self.all_textures.items():
+            # Check search text filter
+            if search_text and search_text not in texture_name.lower():
+                continue
+            
+            # Check color filter
+            if color_filter != "All Types":
+                texture_tag = self._get_texture_color_tag(texture_name, data)
+                expected_tag = self._color_name_to_tag(color_filter)
+                if texture_tag != expected_tag:
+                    continue
+            
+            # If we get here, the texture passed all filters
+            matching_textures[texture_name] = data
         
         # Add filtered textures to list
         for texture_name, data in sorted(matching_textures.items()):
-            # Count how many paths exist and don't exist
-            paths_exist = sum(exists for exists in data['paths'].values())
-            total_paths = len(data['paths'])
-            
-            # Determine tag based on existence in paths
-            tag = ""
-            if paths_exist == 0:
-                # Texture doesn't exist in any path
-                tag = "missing"
-            elif paths_exist < total_paths:
-                # Texture exists in some paths but not all
-                tag = "missing"
-            elif total_paths > 1:
-                # Texture exists in all paths and has multiple paths
-                tag = "partial"
+            # Get color tag for this texture
+            tag = self._get_texture_color_tag(texture_name, data)
             
             # Add to list
-            self.texture_list.insert("", "end", values=(texture_name,), tags=(tag,))
+            self.texture_list.insert("", "end", values=(texture_name,), tags=(tag,) if tag else ())
         
         # Update status with search results
         total_matching = len(matching_textures)
@@ -2441,7 +2961,7 @@ class PBRTexturesFrame(ctk.CTkFrame):
         multiple_matching = sum(1 for data in matching_textures.values() 
                               if len(data['base_paths']) > 1)
         
-        if search_text:
+        if search_text or color_filter != "All Types":
             status_text = f"Found {total_matching} matching textures "
         else:
             status_text = f"Showing all {total_matching} textures "

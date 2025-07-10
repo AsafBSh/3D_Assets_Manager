@@ -119,6 +119,14 @@ class DataManager:
             self.unused_textures.clear()  # Clear unused textures list
             self.pdr_file = None  # Clear PDR file path
             
+            # Reset loading flags to ensure fresh data loading
+            if hasattr(self, 'parents_loaded_from_models'):
+                delattr(self, 'parents_loaded_from_models')
+            if hasattr(self, 'cockpit_parents_loaded'):
+                delattr(self, 'cockpit_parents_loaded')
+            if hasattr(self, 'parents_consolidated'):
+                delattr(self, 'parents_consolidated')
+            
             # Load associated data files from the same directory
             base_dir = os.path.dirname(file_path)
             self.load_class_data(os.path.join(base_dir, "Falcon4_FCD.xml"), self.fcd_data, "Feature")
@@ -322,6 +330,10 @@ class DataManager:
             # Remove parent 0 if it exists
             if 0 in self.parents:
                 del self.parents[0]
+            
+            # Reset consolidation flag since new parent data was loaded
+            if hasattr(self, 'parents_consolidated'):
+                delattr(self, 'parents_consolidated')
             
             return True
             
@@ -547,6 +559,66 @@ class DataManager:
         self.base_folder = os.path.dirname(ct_file_path)
         logger.info(f"Set base folder: {self.base_folder}")
 
+    def find_bms_main_folder(self) -> Optional[str]:
+        """Find the main Falcon BMS folder by looking for launcher.exe."""
+        if not self.base_folder:
+            return None
+            
+        current_path = self.base_folder
+        max_depth = 10  # Prevent infinite loops
+        depth = 0
+        
+        while depth < max_depth:
+            # Check if launcher.exe exists in current directory
+            launcher_path = os.path.join(current_path, "launcher.exe")
+            if os.path.exists(launcher_path):
+                logger.info(f"Found BMS main folder: {current_path}")
+                return current_path
+            
+            # Go up one directory
+            parent_path = os.path.dirname(current_path)
+            if parent_path == current_path:  # Reached root
+                break
+            current_path = parent_path
+            depth += 1
+        
+        logger.warning("Could not find main BMS folder with launcher.exe")
+        return None
+
+    def get_path_relative_to_bms_main(self, path: str) -> str:
+        """Convert a path to be relative to the main BMS folder instead of base_folder."""
+        if not path:
+            return path
+            
+        bms_main = self.find_bms_main_folder()
+        if not bms_main or not self.base_folder:
+            return path  # Fallback to original path
+            
+        try:
+            # Calculate the relative path from BMS main to the CT file's directory (base_folder)
+            base_relative_to_main = os.path.relpath(self.base_folder, bms_main)
+            
+            # If path is just a folder name like "KoreaObj", combine with the calculated base path
+            if path in ["KoreaObj", "KoreaObj_HiRes"]:
+                return os.path.join(base_relative_to_main, path)
+            
+            # If path starts with "Models", combine with the calculated base path  
+            if path.startswith("Models"):
+                return os.path.join(base_relative_to_main, path)
+                
+            # For absolute paths, try to make them relative to BMS main
+            if os.path.isabs(path):
+                try:
+                    return os.path.relpath(path, bms_main)
+                except ValueError:
+                    return path  # Different drives, can't make relative
+            
+            # For other relative paths, combine with the calculated base path
+            return os.path.join(base_relative_to_main, path)
+            
+        except ValueError:
+            # If we can't calculate relative paths, return original
+            return path
 
     def get_bml2_textures(self, parent_number: int) -> List[Dict[str, str]]:
         """Get PBR textures from materials.mtl file for a given parent number."""
@@ -598,8 +670,11 @@ class DataManager:
                     # Remove .dds extension if present
                     base_name = file_name[:-4] if file_name.lower().endswith('.dds') else file_name
                     
+                    # Normalize path separators (handle /, //, \, \\)
+                    normalized_path = base_name.replace('\\\\', '/').replace('\\', '/').replace('//', '/')
+                    
                     # Split path and filename
-                    path_parts = base_name.split('/')
+                    path_parts = normalized_path.split('/')
                     if len(path_parts) > 1:
                         texture_name = path_parts[-1]
                         texture_path = os.path.join("Models", *path_parts[:-1])
@@ -632,21 +707,172 @@ class DataManager:
             
         return textures
 
+    def _process_cockpit_data(self, ckpit_file: str, cockpit_name: str, cockpit_wings: int = None) -> int:
+        """Helper function to process 3dCkpit.dat file and create parent data objects.
+        Returns the number of cockpits processed."""
+        try:
+            if not os.path.exists(ckpit_file):
+                logger.debug(f"Missing 3dCkpit.dat for {cockpit_name}")
+                return 0
+                
+            # Parse 3dCkpit.dat
+            with open(ckpit_file, 'r') as f:
+                ckpit_content = f.read()
+                
+            # Extract parent numbers
+            parent_info = []
+            for line in ckpit_content.split('\n'):
+                line = line.strip()
+                if line.startswith('cockpitmodel '):
+                    try:
+                        parent_num = int(line.split()[1].rstrip(';'))
+                        parent_info.append((parent_num, "Cockpit", "Cockpit"))
+                    except (ValueError, IndexError) as e:
+                        logger.debug(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
+                        continue
+                elif line.startswith('cockpitmodel2 '):
+                    try:
+                        parent_num = int(line.split()[1].rstrip(';'))
+                        parent_info.append((parent_num, "Cockpit", "Switches and Knobs"))
+                    except (ValueError, IndexError) as e:
+                        logger.debug(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
+                        continue
+                elif line.startswith('cockpithudmodel '):
+                    try:
+                        parent_num = int(line.split()[1].rstrip(';'))
+                        parent_info.append((parent_num, "Cockpit", "HUD and Glass"))
+                    except (ValueError, IndexError) as e:
+                        logger.debug(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
+                        continue
+                elif line.startswith('cockpitrttcanopymodel '):
+                    try:
+                        parent_num = int(line.split()[1].rstrip(';'))
+                        parent_info.append((parent_num, "Cockpit", "Additional Canopy"))
+                    except (ValueError, IndexError) as e:
+                        logger.debug(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
+                        continue
+                elif line.startswith('cockpitcanopymodel '):
+                    try:
+                        parent_num = int(line.split()[1].rstrip(';'))
+                        parent_info.append((parent_num, "Cockpit", "Canopy"))
+                    except (ValueError, IndexError) as e:
+                        logger.debug(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
+                        continue
+                elif line.startswith('cockpitwingsmodel '):
+                    try:
+                        parent_num = int(line.split()[1].rstrip(';'))
+                        parent_info.append((parent_num, "Cockpit", "Cockpit Wings"))
+                    except (ValueError, IndexError) as e:
+                        logger.debug(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
+                        continue
+                elif line.startswith('cockpitmodel_empty '):
+                    try:
+                        parent_num = int(line.split()[1].rstrip(';'))
+                        parent_info.append((parent_num, "Cockpit", "Empty Cockpit"))
+                    except (ValueError, IndexError) as e:
+                        logger.debug(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
+                        continue
+                elif line.startswith('cockpitcanopymodel_empty '):
+                    try:
+                        parent_num = int(line.split()[1].rstrip(';'))
+                        parent_info.append((parent_num, "Cockpit", "Empty Canopy"))
+                    except (ValueError, IndexError) as e:
+                        logger.debug(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
+                        continue
+                elif line.startswith('cockpitlegsmodel '):
+                    try:
+                        parent_num = int(line.split()[1].rstrip(';'))
+                        parent_info.append((parent_num, "Cockpit", "Legs"))
+                    except (ValueError, IndexError) as e:
+                        logger.debug(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
+                        continue
+                elif line.startswith('cockpitmixedrealitycovermodel '):
+                    try:
+                        parent_num = int(line.split()[1].rstrip(';'))
+                        parent_info.append((parent_num, "Cockpit", "AR Mask"))
+                    except (ValueError, IndexError) as e:
+                        logger.debug(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
+                        continue
+            
+            # Add cockpit wings parent if found and not -1
+            if cockpit_wings and cockpit_wings != -1:
+                parent_info.append((cockpit_wings, "Cockpit", "Cockpit Wings"))
+            
+            # Create ParentData objects for each parent
+            cockpits_processed = 0
+            for parent_num, type_, model_type in parent_info:
+                # Skip invalid parent numbers
+                if parent_num <= 0:
+                    continue
+
+                # Check if parent already exists and handle multiple aircraft variants
+                if parent_num in self.parents:
+                    existing_parent = self.parents[parent_num]
+                    
+                    # If this is already a cockpit parent, add as aircraft variant
+                    if existing_parent.type == "Cockpit":
+                        # Initialize aircraft_variants if it doesn't exist
+                        if not hasattr(existing_parent, 'aircraft_variants'):
+                            existing_parent.aircraft_variants = {}
+                        
+                        # Add this aircraft variant
+                        existing_parent.aircraft_variants[cockpit_name] = model_type
+                        logger.debug(f"Added aircraft variant {cockpit_name} to existing cockpit parent {parent_num}")
+                    else:
+                        # Update existing parent to be cockpit type
+                        existing_parent.type = type_
+                        existing_parent.model_name = f"{cockpit_name} {model_type}"
+                        existing_parent.model_type = model_type
+                        # Initialize aircraft_variants
+                        existing_parent.aircraft_variants = {cockpit_name: model_type}
+                else:
+                    # Create new parent data
+                    parent_data = ParentData(
+                        parent_number=parent_num,
+                        bml_version=1,  # Default to 1 for cockpit models
+                        textures=[],  # Empty list as textures should come from PDR file
+                        model_name=f"{cockpit_name} {model_type}",
+                        model_type=model_type,
+                        type=type_,  # This should be "Cockpit"
+                        ct_number=0,  # No CT number for cockpit models
+                        entity_idx=0,  # No entity index for cockpit models
+                        outsourced=False
+                    )
+                    # Initialize aircraft_variants for new cockpit parents
+                    parent_data.aircraft_variants = {cockpit_name: model_type}
+                    self.parents[parent_num] = parent_data
+                    cockpits_processed += 1
+                    logger.debug(f"Created new cockpit parent {parent_num} for {cockpit_name}")
+            
+            return cockpits_processed
+            
+        except Exception as e:
+            logger.error(f"Error processing 3dCkpit.dat for {cockpit_name}: {str(e)}")
+            return 0
+
     def load_cockpit_parents(self, base_path: str) -> bool:
         """Load cockpit parent data from Acdata and CkptArt folders."""
         try:
-            # Get root path (up to Terrdata/Objects)
+            # Get root path (up to Terrdata/Objects) - this should be the base BMS folder
             root_path = os.path.dirname(os.path.dirname(os.path.dirname(base_path)))
             
             # Define possible paths for Acdata and CkptArt
+            # Try both the calculated root path and the base_folder path
+            base_folder_root = os.path.dirname(self.base_folder) if self.base_folder else os.path.dirname(base_path)
+            
             acdata_paths = [
                 os.path.join(root_path, "Sim", "Acdata"),
-                os.path.join(os.path.dirname(base_path), "Sim", "Acdata")
+                os.path.join(os.path.dirname(base_path), "Sim", "Acdata"),
+                os.path.join(base_folder_root, "Sim", "Acdata")
             ]
             
             ckptart_paths = [
-                os.path.join(root_path, "Art", "CkptArt"),
-                os.path.join(os.path.dirname(base_path), "Art", "CkptArt")
+                os.path.join(root_path, "art", "ckptart"),  # lowercase as mentioned by user
+                os.path.join(root_path, "Art", "CkptArt"),  # uppercase variant
+                os.path.join(os.path.dirname(base_path), "art", "ckptart"),
+                os.path.join(os.path.dirname(base_path), "Art", "CkptArt"),
+                os.path.join(base_folder_root, "art", "ckptart"),
+                os.path.join(base_folder_root, "Art", "CkptArt")
             ]
             
             # Find valid Acdata path
@@ -677,8 +903,14 @@ class DataManager:
                 
             if not ckptart_path:
                 logger.warning("Could not find CkptArt folder")
+                logger.info(f"Tried CkptArt paths: {ckptart_paths}")
                 return False
 
+            logger.info(f"Using Acdata path: {acdata_path}")
+            logger.info(f"Using CkptArt path: {ckptart_path}")
+
+            # Create array to remember visited folders in CkptArt
+            visited_folders = set()
             cockpits_found = 0
             
             # Process all .txtpb files in Acdata
@@ -716,92 +948,46 @@ class DataManager:
                     if not cockpit_name:
                         continue
                         
-                    # Look for 3dCkpit.dat in the corresponding CkptArt folder
+                    # Process cockpit data using helper function
                     ckpit_file = os.path.join(ckptart_path, cockpit_name, "3dCkpit.dat")
-                    if not os.path.exists(ckpit_file):
-                        logger.warning(f"Missing 3dCkpit.dat for {cockpit_name}")
-                        continue
-                        
-                    # Parse 3dCkpit.dat
-                    with open(ckpit_file, 'r') as f:
-                        ckpit_content = f.read()
-                        
-                    # Extract parent numbers
-                    parent_info = []
-                    for line in ckpit_content.split('\n'):
-                        line = line.strip()
-                        if line.startswith('cockpitmodel '):
-                            try:
-                                parent_num = int(line.split()[1].rstrip(';'))
-                                parent_info.append((parent_num, "Cockpit", "Cockpit"))
-                            except ValueError as e:
-                                logger.warning(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
-                                continue
-                        elif line.startswith('cockpitmodel2 '):
-                            try:
-                                parent_num = int(line.split()[1].rstrip(';'))
-                                parent_info.append((parent_num, "Cockpit", "Switches and Knobs"))
-                            except ValueError as e:
-                                logger.warning(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
-                                continue
-                        elif line.startswith('cockpithudmodel '):
-                            try:
-                                parent_num = int(line.split()[1].rstrip(';'))
-                                parent_info.append((parent_num, "Cockpit", "HUD and Glass"))
-                            except ValueError as e:
-                                logger.warning(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
-                                continue
-                        elif line.startswith('cockpitrttcanopymodel '):
-                            try:
-                                parent_num = int(line.split()[1].rstrip(';'))
-                                parent_info.append((parent_num, "Cockpit", "Additional Canopy"))
-                            except ValueError as e:
-                                logger.warning(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
-                                continue
-                        elif line.startswith('cockpitcanopymodel '):
-                            try:
-                                parent_num = int(line.split()[1].rstrip(';'))
-                                parent_info.append((parent_num, "Cockpit", "Canopy"))
-                            except ValueError as e:
-                                logger.warning(f"Invalid cockpit parent number in {cockpit_name}: {str(e)}")
-                                continue
+                    processed_count = self._process_cockpit_data(ckpit_file, cockpit_name, cockpit_wings)
+                    cockpits_found += processed_count
                     
-                    # Add cockpit wings parent if found and not -1
-                    if cockpit_wings and cockpit_wings != -1:
-                        parent_info.append((cockpit_wings, "Cockpit", "Cockpit Wings"))
-                    
-                    # Create ParentData objects for each parent
-                    for parent_num, type_, model_type in parent_info:
-                        # Skip invalid parent numbers
-                        if parent_num <= 0:
-                            continue
-
-                        # Create new parent data if it doesn't exist
-                        if parent_num not in self.parents:
-                            parent_data = ParentData(
-                                parent_number=parent_num,
-                                bml_version=1,  # Default to 1 for cockpit models
-                                textures=[],  # Empty list as textures should come from PDR file
-                                model_name=f"{cockpit_name} {model_type}",
-                                model_type=model_type,
-                                type=type_,  # This should be "Cockpit"
-                                ct_number=0,  # No CT number for cockpit models
-                                entity_idx=0,  # No entity index for cockpit models
-                                outsourced=False
-                            )
-                            self.parents[parent_num] = parent_data
-                            cockpits_found += 1
-                        else:
-                            # Update existing parent's type and model info
-                            self.parents[parent_num].type = type_  # Ensure type is set to "Cockpit"
-                            self.parents[parent_num].model_name = f"{cockpit_name} {model_type}"
-                            self.parents[parent_num].model_type = model_type
+                    # Add folder name to visited folders array
+                    if processed_count > 0:
+                        visited_folders.add(cockpit_name)
                 
                 except Exception as e:
                     logger.error(f"Error processing {txtpb_file}: {str(e)}")
                     continue
             
-            logger.info(f"Successfully loaded {cockpits_found} cockpit parents")
+            # Process unvisited folders in CkptArt
+            try:
+                logger.info("Processing unvisited CkptArt folders...")
+                unvisited_cockpits = 0
+                
+                for folder_name in os.listdir(ckptart_path):
+                    folder_path = os.path.join(ckptart_path, folder_name)
+                    
+                    # Skip if not a directory or already visited
+                    if not os.path.isdir(folder_path) or folder_name in visited_folders:
+                        continue
+                    
+                    # Use folder name as cockpit name
+                    ckpit_file = os.path.join(folder_path, "3dCkpit.dat")
+                    processed_count = self._process_cockpit_data(ckpit_file, folder_name)
+                    
+                    if processed_count > 0:
+                        unvisited_cockpits += processed_count
+                        logger.info(f"Processed unvisited cockpit folder: {folder_name}")
+                
+                logger.info(f"Successfully loaded {unvisited_cockpits} cockpit parents from unvisited folders")
+                cockpits_found += unvisited_cockpits
+                
+            except Exception as e:
+                logger.error(f"Error processing unvisited CkptArt folders: {str(e)}")
+            
+            logger.info(f"Successfully loaded {cockpits_found} total cockpit parents")
             return True
             
         except Exception as e:
@@ -1017,3 +1203,104 @@ class DataManager:
         except Exception as e:
             logger.error(f"Error loading parents from Models folder: {str(e)}")
             return False
+
+    def get_models_using_parent(self, parent_number: int) -> List[ModelData]:
+        """Get all models that use a specific parent number."""
+        models_using_parent = []
+        parent_str = str(parent_number)
+        
+        for model in self.models.values():
+            # Check if this model uses the parent number in any of its model states
+            if (model.normal_model == parent_str or
+                model.fixed_model == parent_str or
+                model.damaged_model == parent_str or
+                model.destroyed_model == parent_str or
+                model.left_destroyed_model == parent_str or
+                model.right_destroyed_model == parent_str or
+                model.both_models_destroyed == parent_str):
+                models_using_parent.append(model)
+        
+        return models_using_parent
+
+    def consolidate_parent_data(self):
+        """Consolidate and deduplicate parent data, ensuring each parent shows all associated models."""
+        try:
+            logger.info("Starting parent data consolidation...")
+            
+            # Track parents that need consolidation
+            consolidated_parents = {}
+            
+            for parent_number, parent_data in self.parents.items():
+                # Get all models that use this parent
+                models_using_parent = self.get_models_using_parent(parent_number)
+                
+                if models_using_parent:
+                    # If we have models using this parent, update the parent data
+                    consolidated_parent = ParentData(
+                        parent_number=parent_number,
+                        bml_version=parent_data.bml_version,
+                        textures=parent_data.textures,
+                        model_name=parent_data.model_name,
+                        model_type=parent_data.model_type,
+                        type=parent_data.type,
+                        ct_number=parent_data.ct_number,
+                        entity_idx=parent_data.entity_idx,
+                        outsourced=parent_data.outsourced
+                    )
+                    
+                    # Copy aircraft_variants if they exist
+                    if hasattr(parent_data, 'aircraft_variants'):
+                        consolidated_parent.aircraft_variants = parent_data.aircraft_variants
+                    
+                    consolidated_parents[parent_number] = consolidated_parent
+                else:
+                    # Keep the parent as is if no models are using it (e.g., cockpit-only parents)
+                    consolidated_parents[parent_number] = parent_data
+            
+            # Update the parents dictionary
+            self.parents = consolidated_parents
+            
+            logger.info(f"Consolidated {len(consolidated_parents)} parent entries")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error consolidating parent data: {str(e)}")
+            return False
+
+    def debug_cockpit_paths(self, base_path: str):
+        """Debug utility to show all potential cockpit art paths."""
+        logger.info("=== Cockpit Path Debug ===")
+        logger.info(f"Base path: {base_path}")
+        logger.info(f"Base folder: {self.base_folder}")
+        
+        # Get root path (up to Terrdata/Objects) - this should be the base BMS folder
+        root_path = os.path.dirname(os.path.dirname(os.path.dirname(base_path)))
+        base_folder_root = os.path.dirname(self.base_folder) if self.base_folder else os.path.dirname(base_path)
+        
+        logger.info(f"Root path: {root_path}")
+        logger.info(f"Base folder root: {base_folder_root}")
+        
+        # List all potential paths and their existence
+        ckptart_paths = [
+            os.path.join(root_path, "art", "ckptart"),
+            os.path.join(root_path, "Art", "CkptArt"),
+            os.path.join(os.path.dirname(base_path), "art", "ckptart"),
+            os.path.join(os.path.dirname(base_path), "Art", "CkptArt"),
+            os.path.join(base_folder_root, "art", "ckptart"),
+            os.path.join(base_folder_root, "Art", "CkptArt")
+        ]
+        
+        for i, path in enumerate(ckptart_paths):
+            exists = os.path.exists(path)
+            logger.info(f"CkptArt path {i+1}: {path} - Exists: {exists}")
+            if exists:
+                try:
+                    contents = os.listdir(path)
+                    logger.info(f"  Contents count: {len(contents)}")
+                    # Show first few folders as examples
+                    folders = [item for item in contents[:5] if os.path.isdir(os.path.join(path, item))]
+                    logger.info(f"  Sample folders: {folders}")
+                except Exception as e:
+                    logger.error(f"  Error reading directory: {str(e)}")
+        
+        logger.info("=== End Cockpit Path Debug ===")

@@ -108,7 +108,7 @@ class BMSManager(ctk.CTk):
         self.data_manager = DataManager()
         
         # Configure main window
-        self.title("3D Assets Manager v0.98")
+        self.title("3D Assets Manager v1.0")
         self.geometry("1370x750")
         self.minsize(800, 600)  # Set minimum window size
         
@@ -433,32 +433,44 @@ class BMSManager(ctk.CTk):
                 if self.data_manager.ct_file:
                     logger.info("Updating parents frame with loaded data")
                     
-                    # Load parents from Models folder if PDR is not available
+                    # Check if we need to load/process any data (heavy algorithms)
+                    needs_processing = False
+                    
+                    # Check if we need to load parents from Models folder
                     if not self.data_manager.pdr_file and not hasattr(self.data_manager, 'parents_loaded_from_models'):
-                        logger.info("Loading parents from Models folder")
-                        self.data_manager.load_parents_from_models_folder()
-                        self.data_manager.parents_loaded_from_models = True
+                        needs_processing = True
                     
-                    # Load cockpit parents if not already loaded
+                    # Check if we need to load cockpit parents
                     if not hasattr(self.data_manager, 'cockpit_parents_loaded'):
-                        logger.info("Loading cockpit parents data")
-                        self.data_manager.load_cockpit_parents(self.data_manager.ct_file)
-                        self.data_manager.cockpit_parents_loaded = True
+                        needs_processing = True
                     
-                    # Get all parents including cockpit parents
-                    parents = list(self.data_manager.parents.keys())
-                    if parents:
-                        logger.info(f"Found {len(parents)} parents to display")
-                        frame.update_list(parents)
-                        # Log count of each type for debugging
-                        type_counts = {}
-                        for parent in parents:
-                            parent_data = self.data_manager.parents.get(parent)
-                            if parent_data:
-                                type_counts[parent_data.type] = type_counts.get(parent_data.type, 0) + 1
-                        logger.info(f"Parent type counts: {type_counts}")
+                    # Check if we need to consolidate data
+                    if not hasattr(self.data_manager, 'parents_consolidated'):
+                        needs_processing = True
+                    
+                    if needs_processing:
+                        # Show processing window and run heavy algorithms in thread
+                        logger.info("Heavy parent processing needed, showing processing window")
+                        processing_window = ProcessingWindow(self)
+                        processing_window.title_label.configure(text="Loading Parents")
+                        processing_window.status_label.configure(text="Analyzing parent data structure...")
+                        
+                        # Start parent processing thread
+                        thread = threading.Thread(
+                            target=self._load_parents_thread,
+                            args=(frame, processing_window)
+                        )
+                        thread.daemon = True
+                        thread.start()
                     else:
-                        logger.warning("No parents found in data manager")
+                        # No heavy processing needed, directly load existing data
+                        logger.debug("Parent data already processed, loading existing data...")
+                        parents = list(self.data_manager.parents.keys())
+                        if parents:
+                            logger.info(f"Found {len(parents)} parents to display")
+                            frame.update_list(parents)
+                        else:
+                            logger.warning("No parents found in data manager")
             elif name == "unused":
                 frame = UnusedTexturesFrame(self.main_frame)
                 if self.data_manager.pdr_file:
@@ -541,6 +553,54 @@ class BMSManager(ctk.CTk):
             # Close processing window
             self.after(0, processing_window.close)
 
+    def _load_parents_thread(self, parents_frame, processing_window):
+        """Thread function to load and process parent data"""
+        try:
+            data_changed = False
+            
+            # Step 1: Load parents from Models folder if PDR is not available
+            if not self.data_manager.pdr_file and not hasattr(self.data_manager, 'parents_loaded_from_models'):
+                processing_window.update_status("Loading parents from Models folder...")
+                logger.info("Loading parents from Models folder")
+                if self.data_manager.load_parents_from_models_folder():
+                    self.data_manager.parents_loaded_from_models = True
+                    data_changed = True
+                    logger.info("Successfully loaded parent data from Models folder")
+                else:
+                    logger.error("Failed to load parent data from Models folder")
+            
+            # Step 2: Load cockpit parents if not already loaded
+            if not hasattr(self.data_manager, 'cockpit_parents_loaded'):
+                processing_window.update_status("Loading cockpit parent data...")
+                logger.info("Loading cockpit parents data")
+                if self.data_manager.load_cockpit_parents(self.data_manager.ct_file):
+                    self.data_manager.cockpit_parents_loaded = True
+                    data_changed = True
+                    logger.info("Successfully loaded cockpit parent data")
+                else:
+                    logger.warning("Failed to load cockpit parent data")
+            
+            # Step 3: Consolidate parent data if needed
+            if data_changed or not hasattr(self.data_manager, 'parents_consolidated'):
+                processing_window.update_status("Consolidating and organizing data...")
+                logger.info("Consolidating parent data...")
+                if self.data_manager.consolidate_parent_data():
+                    self.data_manager.parents_consolidated = True
+                    logger.info("Successfully consolidated parent data")
+                else:
+                    logger.error("Failed to consolidate parent data")
+            
+            # Step 4: Update the UI with loaded data
+            processing_window.update_status("Updating display...")
+            self.after(0, lambda: self._update_parents_frame(parents_frame, data_changed))
+            
+        except Exception as e:
+            logger.error(f"Error in parents loading thread: {str(e)}")
+            logger.error("Stack trace:", exc_info=True)
+        finally:
+            # Close processing window
+            self.after(0, processing_window.close)
+
     def _update_current_frame(self):
         """Update the current frame with loaded data"""
         try:
@@ -576,6 +636,29 @@ class BMSManager(ctk.CTk):
                     self.pbr_frame.update_list()
         except Exception as e:
             logger.error(f"Error updating current frame: {str(e)}")
+            logger.error("Stack trace:", exc_info=True)
+
+    def _update_parents_frame(self, parents_frame, data_changed):
+        """Update the parents frame with loaded data after thread processing"""
+        try:
+            # Get all parents including cockpit parents
+            parents = list(self.data_manager.parents.keys())
+            if parents:
+                logger.info(f"Found {len(parents)} parents to display")
+                parents_frame.update_list(parents)
+                
+                # Log count of each type for debugging (only if data changed)
+                if data_changed:
+                    type_counts = {}
+                    for parent in parents:
+                        parent_data = self.data_manager.parents.get(parent)
+                        if parent_data:
+                            type_counts[parent_data.type] = type_counts.get(parent_data.type, 0) + 1
+                    logger.info(f"Parent type counts: {type_counts}")
+            else:
+                logger.warning("No parents found in data manager")
+        except Exception as e:
+            logger.error(f"Error updating parents frame: {str(e)}")
             logger.error("Stack trace:", exc_info=True)
 
     def browse_ct_file(self):
